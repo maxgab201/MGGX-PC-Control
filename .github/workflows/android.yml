@@ -17,9 +17,12 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: gradle
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
       - uses: android-actions/setup-android@v3
       - name: Build, test and lint
-        run: ./gradlew clean assembleDebug test lint --stacktrace
+        run: gradle clean assembleDebug test lint --stacktrace
       - name: Prepare universal APK
         run: cp app/build/outputs/apk/debug/app-debug.apk MGGX-PC-Control-universal-debug.apk
       - uses: actions/upload-artifact@v4
