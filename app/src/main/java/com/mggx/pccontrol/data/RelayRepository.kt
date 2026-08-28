@@ -136,7 +136,11 @@ class HttpRelayApi(
             val target = endpoint.url.newBuilder().addPathSegments(path).build()
             val builder = Request.Builder().url(target).method(method, if (method == "GET") null else "{}".toRequestBody("application/json".toMediaType()))
             if (authenticated && config.token.isNotBlank()) builder.header("Authorization", "Bearer ${config.token.trim()}")
-            Log.d(TAG, "Relay request: stage=HTTP host=${endpoint.host} port=${endpoint.port} scheme=${endpoint.scheme} path=/${path.substringBefore('?')}")
+            // Android's Log is deliberately best-effort: diagnostics must never fail because
+            // logging is unavailable (including JVM unit tests using the Android stub).
+            runCatching {
+                Log.d(TAG, "Relay request: stage=HTTP host=${endpoint.host} port=${endpoint.port} scheme=${endpoint.scheme} path=/${path.substringBefore('?')}")
+            }
             client.newCall(builder.build()).execute().use { response ->
                 val body = response.body?.string().orEmpty()
                 if (response.isSuccessful) RelayResult.Success(body, response.code, elapsed())
