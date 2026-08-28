@@ -9,6 +9,7 @@ import com.mggx.pccontrol.domain.DiagnosticState
 import com.mggx.pccontrol.domain.RelayConfig
 import com.mggx.pccontrol.domain.RelayError
 import com.mggx.pccontrol.domain.RelayResult
+import com.mggx.pccontrol.domain.userMessage
 
 private const val TAILSCALE_PACKAGE = "com.tailscale.ipn"
 

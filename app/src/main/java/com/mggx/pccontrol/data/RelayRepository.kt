@@ -26,7 +26,7 @@ private const val TAG = "MggxRelay"
 object RelayUrlNormalizer {
     fun normalize(input: String): RelayResult<RelayEndpoint> {
         val trimmed = input.trim()
-        if (trimmed.isBlank() || trimmed.any { it == '\u0000' || Character.getType(it) == Character.FORMAT || it.isWhitespace() }) {
+        if (trimmed.isBlank() || trimmed.any { it == '\u0000' || Character.getType(it) == Character.FORMAT.toInt() || it.isWhitespace() }) {
             return RelayResult.Failure(RelayError.InvalidUrl, RelayTechnical("URL_VALIDATE"))
         }
         val candidate = if ("://" in trimmed) trimmed else "${if (isLocalOrTailnet(extractHost(trimmed))) "http" else "https"}://$trimmed"

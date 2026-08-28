@@ -104,7 +104,10 @@ class PcViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             store.settings.collect { settings ->
                 if (settings.demoMode) {
-                    api = DemoRelayApi({ settings.simulatedStatus }) { next -> viewModelScope.launch { store.setDemoStatus(next) } }
+                    api = DemoRelayApi(
+                        status = { settings.simulatedStatus },
+                        setStatus = { next -> viewModelScope.launch { store.setDemoStatus(next) } },
+                    )
                     relayConfig = null
                 } else when (val loaded = store.loadRelayConfig(settings)) {
                     is RelayResult.Success -> { relayConfig = loaded.value; api = HttpRelayApi(loaded.value) }
@@ -203,7 +206,7 @@ class PcViewModel(app: Application) : AndroidViewModel(app) {
 
 @Composable private fun LoadingConfiguration() = Surface(Modifier.fillMaxSize()) { Box(contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) { CircularProgressIndicator(); Text("Cargando configuración…") } } }
 
-@Composable private fun Onboarding(vm: PcViewModel) { var page by remember { mutableIntStateOf(0) }; Surface(Modifier.fillMaxSize()) { Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.SpaceBetween) { Column(verticalArrangement = Arrangement.spacedBy(18.dp)) { Icon(Icons.Default.DesktopWindows, null, Modifier.size(72.dp), MaterialTheme.colorScheme.primary); Text("MGGX PC Control", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold); Text(if (page == 0) "Tu PC, desde cualquier lugar." else "Necesitás Tailscale, Moonlight, un relay en casa y Sunshine en tu PC.", style = MaterialTheme.typography.titleLarge) }; if (page == 0) Button({ page = 1 }, Modifier.fillMaxWidth()) { Text("CONTINUAR") } else Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { Button({ vm.finishOnboarding(false) }, Modifier.fillMaxWidth()) { Text("CONFIGURAR AHORA") }; OutlinedButton({ vm.finishOnboarding(true) }, Modifier.fillMaxWidth()) { Text("USAR MODO DEMO") } } } }
+@Composable private fun Onboarding(vm: PcViewModel) { var page by remember { mutableIntStateOf(0) }; Surface(Modifier.fillMaxSize()) { Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.SpaceBetween) { Column(verticalArrangement = Arrangement.spacedBy(18.dp)) { Icon(Icons.Default.DesktopWindows, null, Modifier.size(72.dp), MaterialTheme.colorScheme.primary); Text("MGGX PC Control", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold); Text(if (page == 0) "Tu PC, desde cualquier lugar." else "Necesitás Tailscale, Moonlight, un relay en casa y Sunshine en tu PC.", style = MaterialTheme.typography.titleLarge) }; if (page == 0) Button({ page = 1 }, Modifier.fillMaxWidth()) { Text("CONTINUAR") } else Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { Button({ vm.finishOnboarding(false) }, Modifier.fillMaxWidth()) { Text("CONFIGURAR AHORA") }; OutlinedButton({ vm.finishOnboarding(true) }, Modifier.fillMaxWidth()) { Text("USAR MODO DEMO") } } } } }
 
 @Composable private fun MainShell(ui: PcUiState, vm: PcViewModel) {
     var tab by remember { mutableIntStateOf(0) }; val snackbar = remember { SnackbarHostState() }; val context = LocalContext.current; val haptics = LocalHapticFeedback.current
