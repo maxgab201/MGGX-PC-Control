@@ -54,7 +54,7 @@ class HttpRelayApiIntegrationTest {
     }
 
     @Test fun malformedJsonAndWake202AreHandled() = runTest {
-        server.enqueue(MockResponse().setResponseCode(200).setBody("not json")); assertEquals(RelayError.InvalidResponse, (api().getStatus() as RelayResult.Failure).error)
+        server.enqueue(MockResponse().setResponseCode(200).setBody("not json")); assertEquals(RelayError.InvalidResponse, (api().getStatus() as RelayResult.Failure).error); assertEquals("GET", server.takeRequest().method)
         server.enqueue(MockResponse().setResponseCode(202).setBody("""{"ok":true,"state":"waking"}""")); val wake = api().wake(); assertTrue(wake is RelayResult.Success); assertEquals(202, (wake as RelayResult.Success).httpCode); assertEquals("POST", server.takeRequest().method)
     }
 
