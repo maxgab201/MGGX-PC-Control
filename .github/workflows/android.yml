@@ -9,24 +9,26 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Expand source bundle
-        if: ${{ hashFiles('project-source.tar.gz') != '' }}
-        run: tar -xzf project-source.tar.gz
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
       - uses: android-actions/setup-android@v3
       - name: Build, test and lint
-        run: gradle clean assembleDebug test lint --stacktrace
+        run: |
+          ./gradlew clean --stacktrace
+          ./gradlew test --stacktrace
+          ./gradlew lint --stacktrace
+          ./gradlew assembleDebug --stacktrace
       - name: Prepare universal APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk MGGX-PC-Control-universal-debug.apk
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk MGGX-PC-Control-universal-debug.apk
+          sha256sum MGGX-PC-Control-universal-debug.apk > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: MGGX-PC-Control-universal-debug
-          path: MGGX-PC-Control-universal-debug.apk
+          path: |
+            MGGX-PC-Control-universal-debug.apk
+            SHA256SUMS.txt
           if-no-files-found: error
