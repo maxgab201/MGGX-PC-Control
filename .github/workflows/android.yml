@@ -15,20 +15,60 @@ jobs:
           java-version: '17'
           cache: gradle
       - uses: android-actions/setup-android@v3
-      - name: Build, test and lint
+      - name: Configure stable signing when repository secrets exist
+        env:
+          MGGX_KEYSTORE_BASE64: ${{ secrets.MGGX_KEYSTORE_BASE64 }}
+          MGGX_KEYSTORE_PASSWORD: ${{ secrets.MGGX_KEYSTORE_PASSWORD }}
+          MGGX_KEY_ALIAS: ${{ secrets.MGGX_KEY_ALIAS }}
+          MGGX_KEY_PASSWORD: ${{ secrets.MGGX_KEY_PASSWORD }}
+        run: |
+          if [ -n "$MGGX_KEYSTORE_BASE64" ] && [ -n "$MGGX_KEYSTORE_PASSWORD" ] && [ -n "$MGGX_KEY_ALIAS" ] && [ -n "$MGGX_KEY_PASSWORD" ]; then
+            printf %s "$MGGX_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/mggx-pc-control.jks"
+            {
+              echo "storeFile=$RUNNER_TEMP/mggx-pc-control.jks"
+              echo "storePassword=$MGGX_KEYSTORE_PASSWORD"
+              echo "keyAlias=$MGGX_KEY_ALIAS"
+              echo "keyPassword=$MGGX_KEY_PASSWORD"
+            } > signing.properties
+            echo "SIGNING_PERSISTENCE=verified" >> "$GITHUB_ENV"
+          else
+            echo "SIGNING_PERSISTENCE=blocked: required GitHub Actions secrets are absent" >> "$GITHUB_ENV"
+          fi
+      - name: Unit tests
         run: |
           ./gradlew clean --stacktrace
           ./gradlew test --stacktrace
+      - name: Instrumented Compose tests (API 35)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: ./gradlew connectedDebugAndroidTest --stacktrace
+      - name: Lint and build
+        run: |
           ./gradlew lint --stacktrace
           ./gradlew assembleDebug --stacktrace
       - name: Prepare universal APK
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk MGGX-PC-Control-universal-debug.apk
-          sha256sum MGGX-PC-Control-universal-debug.apk > SHA256SUMS.txt
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          cp "$APK" MGGX-PC-Control-universal-debug-v1.0.2.apk
+          sha256sum MGGX-PC-Control-universal-debug-v1.0.2.apk > SHA256SUMS.txt
+          apksigner verify --verbose --print-certs "$APK"
+          CERT_SHA256=$(apksigner verify --print-certs "$APK" | awk -F': ' '/certificate SHA-256 digest/{print $2; exit}')
+          test -n "$CERT_SHA256"
+          if [ -n "${{ secrets.MGGX_EXPECTED_CERT_SHA256 }}" ]; then test "$CERT_SHA256" = "${{ secrets.MGGX_EXPECTED_CERT_SHA256 }}"; fi
+          {
+            echo "certificate_sha256=$CERT_SHA256"
+            echo "signing_persistence=$SIGNING_PERSISTENCE"
+            echo "two_build_signature_test=not_run_in_this_workflow"
+          } > SIGNING_STATUS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: MGGX-PC-Control-universal-debug
+          name: MGGX-PC-Control-universal-debug-v1.0.2
           path: |
-            MGGX-PC-Control-universal-debug.apk
+            MGGX-PC-Control-universal-debug-v1.0.2.apk
             SHA256SUMS.txt
+            SIGNING_STATUS.txt
           if-no-files-found: error

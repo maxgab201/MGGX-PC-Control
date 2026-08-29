@@ -2,6 +2,7 @@ package com.mggx.pccontrol
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -28,5 +29,15 @@ class ActionFeedbackComposeTest {
             }
         }
         compose.onNodeWithText("GUARDADO").assertIsDisplayed()
+    }
+
+    @Test fun actionButtonRendersErrorWithoutFalseSuccess() {
+        compose.setContent { MaterialTheme { ActionButton({}, ActionState.Error("falló"), "GUARDAR", "GUARDANDO…") } }
+        compose.onNodeWithText("ERROR").assertIsDisplayed()
+    }
+
+    @Test fun idleActionIsEnabledAndHasImmediateLabel() {
+        compose.setContent { MaterialTheme { ActionButton({}, ActionState.Idle, "PROBAR CONEXIÓN", "PROBANDO…") } }
+        compose.onNodeWithText("PROBAR CONEXIÓN").assertIsDisplayed().assertIsEnabled()
     }
 }

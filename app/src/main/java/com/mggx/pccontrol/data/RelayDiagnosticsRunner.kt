@@ -46,9 +46,27 @@ class RelayDiagnosticsRunner(private val context: Context?) {
         report = report.withStep(DiagnosticStage.Authentication, DiagnosticState.RUNNING); publish()
         when (val status = api.getStatus()) {
             is RelayResult.Success -> {
+                val pc = status.value
+                val agent = when {
+                    pc.state == com.mggx.pccontrol.domain.PcState.OFFLINE -> DiagnosticState.SKIPPED to "PC apagada"
+                    pc.agent.reachable == true -> DiagnosticState.SUCCESS to "Disponible${pc.agent.version?.let { " · v$it" }.orEmpty()}"
+                    pc.agent.reachable == false -> DiagnosticState.FAILURE to "No responde"
+                    else -> DiagnosticState.SKIPPED to "No informado"
+                }
+                val sunshine = when (pc.sunshine.installed) {
+                    false -> DiagnosticState.SKIPPED to "No instalado"
+                    else -> when (pc.sunshine.running) { true -> DiagnosticState.SUCCESS to "Running"; false -> DiagnosticState.FAILURE to "Stopped"; null -> DiagnosticState.SKIPPED to "No informado" }
+                }
+                val tailscale = when (pc.tailscale.installed) {
+                    false -> DiagnosticState.SKIPPED to "No instalado"
+                    else -> when (pc.tailscale.running) { true -> DiagnosticState.SUCCESS to "Connected${pc.tailscale.ip?.let { " · $it" }.orEmpty()}"; false -> DiagnosticState.FAILURE to "Stopped"; null -> DiagnosticState.SKIPPED to "No informado" }
+                }
                 report = report.withStep(DiagnosticStage.Authentication, DiagnosticState.SUCCESS, "OK")
-                    .withStep(DiagnosticStage.Status, DiagnosticState.SUCCESS, "200 · ${status.value.state.name}")
-                    .copy(pcInfo = status.value)
+                    .withStep(DiagnosticStage.Status, DiagnosticState.SUCCESS, "200 · ${pc.state.name}")
+                    .withStep(DiagnosticStage.Agent, agent.first, agent.second)
+                    .withStep(DiagnosticStage.Sunshine, sunshine.first, sunshine.second)
+                    .withStep(DiagnosticStage.PcTailscale, tailscale.first, tailscale.second)
+                    .copy(pcInfo = pc)
                 publish(); return report
             }
             is RelayResult.Failure -> {

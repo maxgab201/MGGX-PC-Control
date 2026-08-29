@@ -4,9 +4,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+import java.util.Properties
+
+val signingProperties = Properties()
+val signingPropertiesFile = rootProject.file("signing.properties")
+if (signingPropertiesFile.isFile) signingPropertiesFile.inputStream().use(signingProperties::load)
+val stableSigningReady = listOf("storeFile", "storePassword", "keyAlias", "keyPassword").all { signingProperties.getProperty(it).isNullOrBlank().not() }
+
 android { namespace = "com.mggx.pccontrol"; compileSdk = 36
-    defaultConfig { applicationId = "com.mggx.pccontrol"; minSdk = 23; targetSdk = 36; versionCode = 2; versionName = "1.0.1"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
-    buildTypes { release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
+    defaultConfig { applicationId = "com.mggx.pccontrol"; minSdk = 23; targetSdk = 36; versionCode = 3; versionName = "1.0.2"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+    signingConfigs { if (stableSigningReady) create("stable") { storeFile = rootProject.file(signingProperties.getProperty("storeFile")); storePassword = signingProperties.getProperty("storePassword"); keyAlias = signingProperties.getProperty("keyAlias"); keyPassword = signingProperties.getProperty("keyPassword") } }
+    buildTypes { debug { if (stableSigningReady) signingConfig = signingConfigs.getByName("stable") }; release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"); if (stableSigningReady) signingConfig = signingConfigs.getByName("stable") } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17; isCoreLibraryDesugaringEnabled = true }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true; buildConfig = true }

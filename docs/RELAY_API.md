@@ -1,4 +1,4 @@
-# MGGX Relay API v1
+# MGGX Relay API v1 (compatibilidad Android 1.0.2)
 
 La URL configurada es la raíz del relay. La app normaliza de forma segura `100.x.x.x:8765`, `http://100.x.x.x:8765/`, `/api/v1` y `/health`. HTTP se acepta solo para hosts privados, localhost, MagicDNS o `.ts.net`; para hosts públicos se exige HTTPS.
 
@@ -7,12 +7,12 @@ La prueba de conexión ejecuta, en orden: validación de URL, observación de VP
 ## Endpoints
 
 - `GET /health` → `{ "ok": true, "service": "mggx-relay", "version": 1 }`
-- `GET /api/v1/status` con `Authorization: Bearer <token>` → `{ "ok": true, "apiVersion": 1, "pcId": "main", "state": "offline", "lastSeen": null, "monitors": [] }`
+- `GET /api/v1/status` con `Authorization: Bearer <token>` → `{ "ok": true, "apiVersion": 1, "pcId": "main", "state": "offline", "lastSeen": null }`. Android ignora el campo legado `monitors` si existe.
 - `POST /api/v1/power/wake` → `202 Accepted` es éxito: la orden Wake-on-LAN fue aceptada, no implica todavía que la PC esté online.
-- `POST /api/v1/power/shutdown|restart|sleep|hibernate`
-- `GET /api/v1/monitors`
-- `POST /api/v1/monitors/{id}/activate`
-- `POST /api/v1/actions/camera|terminal|files|task-manager`
+- `POST /api/v1/power/shutdown|restart|sleep|hibernate|lock`
+- `POST /api/v1/services/sunshine/restart`
+
+El contrato ampliado para Relay → PC Agent se encuentra en `RELAY_EXPECTATIONS.md`. Monitores, cámara, terminal, archivos y administración remota están explícitamente fuera de 1.0.2.
 
 ## Errores
 
