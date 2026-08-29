@@ -23,7 +23,7 @@ class RelayParsingTest {
         assertEquals(PcState.ONLINE, pc.state)
         assertTrue(pc.agent.reachable == true)
         assertEquals("1.0.0", pc.agent.version)
-        assertEquals(12_345, pc.agent.uptimeSeconds)
+        assertEquals(12_345L, pc.agent.uptimeSeconds)
         assertFalse(pc.capabilities.hibernate == true)
         assertEquals("100.64.1.2", pc.tailscale.ip)
     }

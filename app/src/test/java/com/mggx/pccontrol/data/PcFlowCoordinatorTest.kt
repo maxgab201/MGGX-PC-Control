@@ -15,7 +15,7 @@ class PcFlowCoordinatorTest {
     }
 
     @Test fun onlineWithStoppedSunshineRestartsOnce() = runTest {
-        val api = ScriptedRelay(listOf(pc(PcState.ONLINE, sunshine = false, sunshineRestart = true), pc(PcState.ONLINE, sunshine = true)))
+        val api = ScriptedRelay(listOf(pc(PcState.ONLINE, sunshine = false, sunshineRestart = true), pc(PcState.ONLINE, sunshine = false, sunshineRestart = true), pc(PcState.ONLINE, sunshine = true)))
         assertEquals(OpenPcOutcome.MoonlightReady, PcFlowCoordinator(api, 0).openPc(100))
         assertEquals(1, api.sunshineRestartCalls)
     }
