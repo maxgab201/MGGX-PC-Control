@@ -69,7 +69,7 @@ class PcViewModel(app: Application) : AndroidViewModel(app) {
     private var flowJob: Job? = null
 
     init { viewModelScope.launch { store.settings.collect { settings ->
-        if (settings.demoMode) { api = DemoRelayApi({ settings.simulatedStatus }) { next -> viewModelScope.launch { store.setDemoStatus(next) } }; config = null }
+        if (settings.demoMode) { api = DemoRelayApi(status = { settings.simulatedStatus }, setStatus = { next -> viewModelScope.launch { store.setDemoStatus(next) } }); config = null }
         else when (val loaded = store.loadRelayConfig(settings)) { is RelayResult.Success -> { config = loaded.value; api = HttpRelayApi(loaded.value) }; is RelayResult.Failure -> { config = null; api = null; _ui.update { it.copy(relayError = loaded.error, technical = loaded.technical) } } }
         _ui.update { old -> old.copy(loaded = true, settings = settings, info = old.info.copy(pcId = settings.pcId, name = settings.pcName)) }
     } } }
