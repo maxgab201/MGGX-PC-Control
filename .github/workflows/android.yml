@@ -45,6 +45,7 @@ jobs:
           api-level: 35
           target: google_apis
           arch: x86_64
+          emulator-boot-timeout: 180
           disable-animations: true
           script: ./gradlew connectedDebugAndroidTest --stacktrace
       - name: Lint and build
