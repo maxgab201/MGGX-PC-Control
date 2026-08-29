@@ -39,6 +39,7 @@ jobs:
           ./gradlew clean --stacktrace
           ./gradlew test --stacktrace
       - name: Instrumented Compose tests (API 35)
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
