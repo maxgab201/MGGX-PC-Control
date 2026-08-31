@@ -69,7 +69,7 @@ fun PairingScannerLauncher(kind: PairingQrKind, label: String = "ESCANEAR CÓDIG
     }
 }
 
-@OptIn(ExperimentalGetImage::class)
+@ExperimentalGetImage
 @Composable
 private fun PairingCameraScreen(kind: PairingQrKind, onClose: () -> Unit, onValid: (ValidatedQr) -> Unit) {
     val context = LocalContext.current
