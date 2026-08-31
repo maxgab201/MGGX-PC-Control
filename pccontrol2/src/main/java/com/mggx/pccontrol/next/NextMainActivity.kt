@@ -204,19 +204,63 @@ class NextViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
-@Composable private fun WizardFrame(title: String, step: OnboardingStep, vm: NextViewModel, content: @Composable () -> Unit) = Scaffold(topBar = { TopAppBar(title = { Text(title) }) }) { padding -> LazyColumn(Modifier.fillMaxSize().padding(padding).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) { item { AssistChip({}, label = { Text("Paso ${step.ordinal + 1}") }) }; item { content() } } }
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable private fun WizardFrame(title: String, step: OnboardingStep, vm: NextViewModel, content: @Composable () -> Unit) {
+    Scaffold(topBar = { TopAppBar(title = { Text(title) }) }) { padding ->
+        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            item { AssistChip(onClick = {}, label = { Text("Paso ${step.ordinal + 1}") }) }
+            item { content() }
+        }
+    }
+}
 
-@Composable private fun AppRequirement(name: String, explanation: String, packageName: String, context: Context) { val installed = remember(packageName) { installed(context, packageName) }; Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text(name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold); Text(explanation); Text(if (installed) "INSTALADO ✓" else "Todavía no está instalado", color = if (installed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton({ openStore(context, packageName) }) { Text("INSTALAR") }; Button({ openPackage(context, packageName) }) { Text("ABRIR") } } } }
+@Composable private fun AppRequirement(name: String, explanation: String, packageName: String, context: Context) {
+    val isInstalled = remember(packageName) { installed(context, packageName) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(explanation)
+            Text(if (isInstalled) "INSTALADO ✓" else "Todavía no está instalado", color = if (isInstalled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton({ openStore(context, packageName) }) { Text("INSTALAR") }
+                Button({ openPackage(context, packageName) }) { Text("ABRIR") }
+            }
+        }
+    }
+}
 
-@Composable private fun HomePairingStep(vm: NextViewModel) { var payload by remember { mutableStateOf("") }; var result by remember { mutableStateOf<String?>(null) }; Text("Vinculá el celular que queda en casa", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text("Escaneá el código que muestra el otro celular. Como alternativa temporal para desarrollo podés pegar el código aquí."); TextField(payload, { payload = it }, Modifier.fillMaxWidth(), label = { Text("Código de vinculación") }); result?.let { Text(it, color = MaterialTheme.colorScheme.primary) }; Button({ vm.claimHome(payload) { result = it } }, Modifier.fillMaxWidth(), enabled = payload.isNotBlank()) { Icon(Icons.Default.QrCodeScanner, null); Text(" VINCULAR") } }
+@Composable private fun HomePairingStep(vm: NextViewModel) {
+    var payload by remember { mutableStateOf("") }
+    var result by remember { mutableStateOf<String?>(null) }
+    Text("Vinculá el celular que queda en casa", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+    Text("Escaneá el código que muestra el otro celular. También podés pegar el código temporal.")
+    TextField(payload, { payload = it }, Modifier.fillMaxWidth(), label = { Text("Código de vinculación") })
+    result?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+    Button({ vm.claimHome(payload) { result = it } }, Modifier.fillMaxWidth(), enabled = payload.isNotBlank()) { Icon(Icons.Default.QrCodeScanner, null); Text(" VINCULAR") }
+}
 
-@Composable private fun AgentPairingStep(vm: NextViewModel) { var url by remember { mutableStateOf("") }; var token by remember { mutableStateOf("") }; var mac by remember { mutableStateOf("") }; var broadcast by remember { mutableStateOf("") }; Text("Vinculá tu PC", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text("El MGGX PC Agent mostrará un código temporal para escanear. Esa vinculación segura estará disponible cuando el Agent actualizado esté instalado."); Text("Para probar hoy con el sistema actual podés abrir las opciones avanzadas.", color = MaterialTheme.colorScheme.onSurfaceVariant); var advanced by remember { mutableStateOf(false) }; OutlinedButton({ advanced = !advanced }, Modifier.fillMaxWidth()) { Text("OPCIONES AVANZADAS DE PRUEBA") }; if (advanced) { TextField(url, { url = it }, Modifier.fillMaxWidth(), label = { Text("Dirección de prueba del Agent") }); TextField(token, { token = it }, Modifier.fillMaxWidth(), label = { Text("Credencial del Agent") }); TextField(mac, { mac = it }, Modifier.fillMaxWidth(), label = { Text("MAC para encendido remoto") }); TextField(broadcast, { broadcast = it }, Modifier.fillMaxWidth(), label = { Text("Dirección de red de casa") }); Button({ vm.saveHomeAndStart(url, token, mac, broadcast) }, Modifier.fillMaxWidth(), enabled = url.isNotBlank() && token.isNotBlank()) { Text("GUARDAR Y ACTIVAR") } } }
+@Composable private fun AgentPairingStep(vm: NextViewModel) {
+    var url by remember { mutableStateOf("") }; var token by remember { mutableStateOf("") }
+    var mac by remember { mutableStateOf("") }; var broadcast by remember { mutableStateOf("") }
+    var advanced by remember { mutableStateOf(false) }
+    Text("Vinculá tu PC", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+    Text("El MGGX PC Agent mostrará un código temporal para escanear cuando esté actualizado.")
+    OutlinedButton({ advanced = !advanced }, Modifier.fillMaxWidth()) { Text("OPCIONES AVANZADAS DE PRUEBA") }
+    if (advanced) {
+        TextField(url, { url = it }, Modifier.fillMaxWidth(), label = { Text("Dirección de prueba del Agent") })
+        TextField(token, { token = it }, Modifier.fillMaxWidth(), label = { Text("Credencial del Agent") })
+        TextField(mac, { mac = it }, Modifier.fillMaxWidth(), label = { Text("MAC para encendido remoto") })
+        TextField(broadcast, { broadcast = it }, Modifier.fillMaxWidth(), label = { Text("Dirección de red de casa") })
+        Button({ vm.saveHomeAndStart(url, token, mac, broadcast) }, Modifier.fillMaxWidth(), enabled = url.isNotBlank() && token.isNotBlank()) { Text("GUARDAR Y ACTIVAR") }
+    }
+}
 
 @Composable private fun MoonlightStep(title: String, body: String, next: () -> Unit) { val context = LocalContext.current; Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text(body); OutlinedButton({ openPackage(context, MOONLIGHT_PACKAGE) }, Modifier.fillMaxWidth()) { Text("ABRIR MOONLIGHT") }; Button(next, Modifier.fillMaxWidth()) { Text("CONTINUAR") } }
 @Composable private fun Checklist(entries: List<String>) = Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { entries.forEach { Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary); Text("  $it") } } }
 
 @Composable private fun ControlDashboard(settings: NextSettings, vm: NextViewModel) = DashboardShell("MGGX PC", Icons.Default.Computer) { Text("Celular principal", color = MaterialTheme.colorScheme.primary); StatusRow("Celular en casa", if (settings.pairedHomeHost.isBlank()) "Todavía no vinculado" else "Conectado"); StatusRow("PC", "Usá Diagnóstico para comprobar el estado en vivo"); Button({ vm.resume(OnboardingStep.CONTROL_PREPARE_PHONE) }, Modifier.fillMaxWidth()) { Text("CONTINUAR CONFIGURACIÓN") }; LegacyCard(settings, vm) }
 @Composable private fun HomeDashboard(settings: NextSettings, vm: NextViewModel) { val runtime by vm.homeRuntime.collectAsState(); DashboardShell("Este celular mantiene tu PC disponible", Icons.Default.Home) { Text("Dejalo conectado al cargador y al Wi‑Fi.", color = MaterialTheme.colorScheme.onSurfaceVariant); StatusRow("Servicio", if (runtime.serverRunning) "Activo ✓" else "Detenido"); StatusRow("Conexión segura", if (runtime.vpnActive) "Conectada ✓" else "Revisar Tailscale"); StatusRow("PC", runtime.state.name.replace('_', ' ')); Button({ vm.startHome() }, Modifier.fillMaxWidth()) { Text("REINICIAR CONEXIÓN") }; Text("El código para vincular otro celular se muestra una vez que la conexión segura tenga una dirección disponible.") } }
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun DashboardShell(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, content: @Composable () -> Unit) = Scaffold(topBar = { TopAppBar(title = { Text(title) }, navigationIcon = { Icon(icon, null, Modifier.padding(12.dp)) }) }) { padding -> Column(Modifier.fillMaxSize().padding(padding).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) { content() } }
 @Composable private fun StatusRow(name: String, value: String) = Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(name); Text(value, fontWeight = FontWeight.Medium) }
 @Composable private fun LegacyCard(settings: NextSettings, vm: NextViewModel) { var show by remember { mutableStateOf(false) }; var url by remember { mutableStateOf(settings.legacyUrl) }; var token by remember { mutableStateOf("") }; var pcId by remember { mutableStateOf(settings.legacyPcId) }; OutlinedButton({ show = !show }, Modifier.fillMaxWidth()) { Text("AVANZADO / COMPATIBILIDAD CON SISTEMA ACTUAL") }; if (show) Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("Estas opciones son para diagnóstico o configuración manual.", fontWeight = FontWeight.Bold); TextField(url, { url = it }, label = { Text("Dirección del Relay") }); TextField(token, { token = it }, label = { Text("Token (no se muestra después)") }); TextField(pcId, { pcId = it }, label = { Text("ID de PC") }); Button({ vm.saveLegacy(url, pcId, token) }) { Text("GUARDAR CONFIGURACIÓN DE PRUEBA") } } } }

@@ -10,7 +10,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
 import io.ktor.server.cio.CIO
-import io.ktor.server.engine.ApplicationEngine
+import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respondText
@@ -136,7 +136,7 @@ class HomeDeviceServer(
     private val store: NextSettingsStore,
     private val sessions: HomePairingSessions = HomePairingSessions(),
 ) {
-    private var engine: ApplicationEngine? = null
+    private var engine: EmbeddedServer<*, *>? = null
     val isRunning get() = engine != null
 
     suspend fun start(config: HomeDeviceConfig) {
