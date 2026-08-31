@@ -68,6 +68,8 @@ import com.mggx.pccontrol.next.data.NextSettings
 import com.mggx.pccontrol.next.data.NextSettingsStore
 import com.mggx.pccontrol.next.home.HomeDeviceRuntime
 import com.mggx.pccontrol.next.home.HomeDeviceService
+import com.mggx.pccontrol.next.home.HomeClaimResult
+import com.mggx.pccontrol.next.home.HomePairingClient
 import com.mggx.pccontrol.next.pairing.PairingParseResult
 import com.mggx.pccontrol.next.pairing.PairingProtocol
 import com.mggx.pccontrol.next.v2.DeviceRole
@@ -89,21 +91,31 @@ class NextMainActivity : ComponentActivity() {
 
 class NextViewModel(application: Application) : AndroidViewModel(application) {
     private val store = NextSettingsStore(application)
+    private val pairingClient = HomePairingClient(store)
     val settings = store.settings.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NextSettings())
     val homeRuntime = HomeDeviceRuntime.state
     fun choose(role: DeviceRole) = viewModelScope.launch { store.selectRole(role) }
     fun next(step: OnboardingStep) = viewModelScope.launch { store.setStep(step) }
+    fun resume(step: OnboardingStep) = viewModelScope.launch { store.resumeSetup(step) }
     fun complete() = viewModelScope.launch { store.complete() }
     fun startHome() = viewModelScope.launch { val current = store.snapshot(); store.saveHome(current.home.copy(enabled = true)); HomeDeviceService.start(getApplication()) }
-    fun saveHomeAgent(agentUrl: String, agentToken: String, mac: String, broadcast: String) = viewModelScope.launch {
+    fun saveHomeAndStart(agentUrl: String, agentToken: String, mac: String, broadcast: String) = viewModelScope.launch {
         val current = store.snapshot(); if (!store.saveAgentToken(agentToken.trim())) return@launch
         store.saveHome(current.home.copy(enabled = true, agentUrl = agentUrl.trim(), wakeOnLan = current.home.wakeOnLan.copy(macAddress = mac.trim(), broadcastAddress = broadcast.trim())))
+        HomeDeviceService.start(getApplication())
+        store.complete()
     }
     fun saveLegacy(url: String, pcId: String, token: String) = viewModelScope.launch { store.saveLegacy(url, pcId, token) }
     fun claimHome(raw: String, onResult: (String) -> Unit) = viewModelScope.launch {
         when (val parsed = PairingProtocol.parse(raw)) {
             is PairingParseResult.Invalid -> onResult(parsed.reason)
-            is PairingParseResult.Valid -> onResult("Código leído. La vinculación con el celular de casa se completa cuando esté disponible por Tailscale.")
+            is PairingParseResult.Valid -> when (val result = pairingClient.claim(parsed.offer)) {
+                is HomeClaimResult.Success -> {
+                    store.setStep(OnboardingStep.CONTROL_SUNSHINE)
+                    onResult("Celular en casa vinculado a ${result.pcName} ✓")
+                }
+                is HomeClaimResult.Failure -> onResult(result.message)
+            }
         }
     }
 }
@@ -198,12 +210,12 @@ class NextViewModel(application: Application) : AndroidViewModel(application) {
 
 @Composable private fun HomePairingStep(vm: NextViewModel) { var payload by remember { mutableStateOf("") }; var result by remember { mutableStateOf<String?>(null) }; Text("Vinculá el celular que queda en casa", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text("Escaneá el código que muestra el otro celular. Como alternativa temporal para desarrollo podés pegar el código aquí."); TextField(payload, { payload = it }, Modifier.fillMaxWidth(), label = { Text("Código de vinculación") }); result?.let { Text(it, color = MaterialTheme.colorScheme.primary) }; Button({ vm.claimHome(payload) { result = it } }, Modifier.fillMaxWidth(), enabled = payload.isNotBlank()) { Icon(Icons.Default.QrCodeScanner, null); Text(" VINCULAR") } }
 
-@Composable private fun AgentPairingStep(vm: NextViewModel) { var url by remember { mutableStateOf("") }; var token by remember { mutableStateOf("") }; var mac by remember { mutableStateOf("") }; var broadcast by remember { mutableStateOf("") }; Text("Vinculá tu PC", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text("El Agent 1.1 mostrará un QR temporal. Mientras se actualiza, Avanzado permite usar los datos de prueba sin afectar el onboarding normal."); TextField(url, { url = it }, Modifier.fillMaxWidth(), label = { Text("Dirección de prueba del Agent (Avanzado)") }); TextField(token, { token = it }, Modifier.fillMaxWidth(), label = { Text("Credencial temporal") }); TextField(mac, { mac = it }, Modifier.fillMaxWidth(), label = { Text("MAC para encendido remoto") }); TextField(broadcast, { broadcast = it }, Modifier.fillMaxWidth(), label = { Text("Dirección de red de casa") }); Button({ vm.saveHomeAgent(url, token, mac, broadcast); vm.startHome(); vm.complete() }, Modifier.fillMaxWidth()) { Text("GUARDAR Y ACTIVAR") } }
+@Composable private fun AgentPairingStep(vm: NextViewModel) { var url by remember { mutableStateOf("") }; var token by remember { mutableStateOf("") }; var mac by remember { mutableStateOf("") }; var broadcast by remember { mutableStateOf("") }; Text("Vinculá tu PC", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text("El MGGX PC Agent mostrará un código temporal para escanear. Esa vinculación segura estará disponible cuando el Agent actualizado esté instalado."); Text("Para probar hoy con el sistema actual podés abrir las opciones avanzadas.", color = MaterialTheme.colorScheme.onSurfaceVariant); var advanced by remember { mutableStateOf(false) }; OutlinedButton({ advanced = !advanced }, Modifier.fillMaxWidth()) { Text("OPCIONES AVANZADAS DE PRUEBA") }; if (advanced) { TextField(url, { url = it }, Modifier.fillMaxWidth(), label = { Text("Dirección de prueba del Agent") }); TextField(token, { token = it }, Modifier.fillMaxWidth(), label = { Text("Credencial del Agent") }); TextField(mac, { mac = it }, Modifier.fillMaxWidth(), label = { Text("MAC para encendido remoto") }); TextField(broadcast, { broadcast = it }, Modifier.fillMaxWidth(), label = { Text("Dirección de red de casa") }); Button({ vm.saveHomeAndStart(url, token, mac, broadcast) }, Modifier.fillMaxWidth(), enabled = url.isNotBlank() && token.isNotBlank()) { Text("GUARDAR Y ACTIVAR") } } }
 
 @Composable private fun MoonlightStep(title: String, body: String, next: () -> Unit) { val context = LocalContext.current; Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text(body); OutlinedButton({ openPackage(context, MOONLIGHT_PACKAGE) }, Modifier.fillMaxWidth()) { Text("ABRIR MOONLIGHT") }; Button(next, Modifier.fillMaxWidth()) { Text("CONTINUAR") } }
 @Composable private fun Checklist(entries: List<String>) = Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { entries.forEach { Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary); Text("  $it") } } }
 
-@Composable private fun ControlDashboard(settings: NextSettings, vm: NextViewModel) = DashboardShell("MGGX PC", Icons.Default.Computer) { Text("Celular principal", color = MaterialTheme.colorScheme.primary); StatusRow("Celular en casa", if (settings.pairedHomeHost.isBlank()) "Todavía no vinculado" else "Conectado"); StatusRow("PC", "Usá Diagnóstico para comprobar el estado en vivo"); Button({ vm.next(OnboardingStep.CONTROL_PREPARE_PHONE) }, Modifier.fillMaxWidth()) { Text("CONTINUAR CONFIGURACIÓN") }; LegacyCard(settings, vm) }
+@Composable private fun ControlDashboard(settings: NextSettings, vm: NextViewModel) = DashboardShell("MGGX PC", Icons.Default.Computer) { Text("Celular principal", color = MaterialTheme.colorScheme.primary); StatusRow("Celular en casa", if (settings.pairedHomeHost.isBlank()) "Todavía no vinculado" else "Conectado"); StatusRow("PC", "Usá Diagnóstico para comprobar el estado en vivo"); Button({ vm.resume(OnboardingStep.CONTROL_PREPARE_PHONE) }, Modifier.fillMaxWidth()) { Text("CONTINUAR CONFIGURACIÓN") }; LegacyCard(settings, vm) }
 @Composable private fun HomeDashboard(settings: NextSettings, vm: NextViewModel) { val runtime by vm.homeRuntime.collectAsState(); DashboardShell("Este celular mantiene tu PC disponible", Icons.Default.Home) { Text("Dejalo conectado al cargador y al Wi‑Fi.", color = MaterialTheme.colorScheme.onSurfaceVariant); StatusRow("Servicio", if (runtime.serverRunning) "Activo ✓" else "Detenido"); StatusRow("Conexión segura", if (runtime.vpnActive) "Conectada ✓" else "Revisar Tailscale"); StatusRow("PC", runtime.state.name.replace('_', ' ')); Button({ vm.startHome() }, Modifier.fillMaxWidth()) { Text("REINICIAR CONEXIÓN") }; Text("El código para vincular otro celular se muestra una vez que la conexión segura tenga una dirección disponible.") } }
 @Composable private fun DashboardShell(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, content: @Composable () -> Unit) = Scaffold(topBar = { TopAppBar(title = { Text(title) }, navigationIcon = { Icon(icon, null, Modifier.padding(12.dp)) }) }) { padding -> Column(Modifier.fillMaxSize().padding(padding).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) { content() } }
 @Composable private fun StatusRow(name: String, value: String) = Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(name); Text(value, fontWeight = FontWeight.Medium) }

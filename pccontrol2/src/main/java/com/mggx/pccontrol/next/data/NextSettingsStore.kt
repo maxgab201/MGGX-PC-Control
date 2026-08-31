@@ -55,6 +55,7 @@ class NextSettingsStore(private val context: Context) {
     }
     suspend fun setStep(step: OnboardingStep) = context.nextDataStore.edit { it[Key.step] = step.name }
     suspend fun complete() = context.nextDataStore.edit { it[Key.complete] = true; it[Key.step] = OnboardingStep.COMPLETE.name }
+    suspend fun resumeSetup(step: OnboardingStep) = context.nextDataStore.edit { it[Key.complete] = false; it[Key.step] = step.name }
     suspend fun saveHome(config: HomeDeviceConfig) = context.nextDataStore.edit { p ->
         p[Key.homeEnabled] = config.enabled; p[Key.homePort] = config.port; p[Key.pcId] = config.pcId; p[Key.agentUrl] = config.agentUrl; p[Key.pcName] = config.agentName
         p[Key.wolMac] = config.wakeOnLan.macAddress; p[Key.wolBroadcast] = config.wakeOnLan.broadcastAddress; p[Key.wolPort] = config.wakeOnLan.udpPort

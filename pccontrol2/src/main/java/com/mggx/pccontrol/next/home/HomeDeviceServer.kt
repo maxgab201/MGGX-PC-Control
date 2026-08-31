@@ -20,6 +20,7 @@ import io.ktor.server.routing.routing
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -32,6 +33,11 @@ import java.util.Base64
 import java.util.concurrent.TimeUnit
 
 data class AgentReply(val code: Int, val body: String)
+
+sealed interface HomeClaimResult {
+    data class Success(val pcId: String, val pcName: String) : HomeClaimResult
+    data class Failure(val message: String) : HomeClaimResult
+}
 
 interface AgentGateway {
     suspend fun health(): AgentReply
@@ -56,6 +62,46 @@ class HttpAgentGateway(private val baseUrl: String, private val token: String) :
     }
 }
 
+/**
+ * Control phone -> home phone pairing exchange. The one-time QR secret is sent once over the
+ * Tailnet/private network and is exchanged for a distinct controller credential. The credential
+ * is written directly to the control-phone Keystore and never reaches DataStore or logs.
+ */
+class HomePairingClient(private val store: NextSettingsStore) {
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(10, TimeUnit.SECONDS)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
+
+    suspend fun claim(offer: PairingOffer): HomeClaimResult = withContext(Dispatchers.IO) {
+        val url = runCatching {
+            HttpUrl.Builder().scheme("http").host(offer.host).port(offer.port)
+                .addPathSegments("api/v1/pair/claim").build()
+        }.getOrElse { return@withContext HomeClaimResult.Failure("El código de vinculación tiene una dirección inválida.") }
+        val body = JSONObject().put("secret", offer.secret).toString()
+            .toRequestBody("application/json".toMediaType())
+        val request = Request.Builder().url(url).post(body).build()
+        runCatching {
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string().orEmpty()
+                if (response.code == 401) return@use HomeClaimResult.Failure("El código venció o ya fue usado. Generá uno nuevo en el celular de casa.")
+                if (response.code !in 200..299) return@use HomeClaimResult.Failure("No se pudo vincular el celular de casa. Revisá que esté encendido y con la conexión segura activa.")
+                val json = JSONObject(responseBody)
+                val controllerToken = json.optString("controllerToken").trim()
+                if (controllerToken.isBlank()) return@use HomeClaimResult.Failure("El celular de casa respondió sin una credencial válida.")
+                val pcId = json.optString("pcId", "main").ifBlank { "main" }
+                val pcName = json.optString("name", "MGGX PC").ifBlank { "MGGX PC" }
+                if (!store.savePairedHome(offer.host, offer.port, pcName, controllerToken)) {
+                    HomeClaimResult.Failure("No se pudo guardar la vinculación de forma segura.")
+                } else HomeClaimResult.Success(pcId, pcName)
+            }
+        }.getOrElse { HomeClaimResult.Failure("No encontramos el celular que quedó en casa. Revisá Wi‑Fi y la conexión segura.") }
+    }
+}
+
 object WakeOnLanSender {
     suspend fun send(mac: String, broadcast: String, port: Int): Boolean = withContext(Dispatchers.IO) {
         val bytes = mac.replace(":", "").replace("-", "").chunked(2).map { it.toInt(16).toByte() }
@@ -69,8 +115,12 @@ object WakeOnLanSender {
 class HomePairingSessions {
     private val lock = Any()
     private var active: PairingOffer? = null
+    private val attempts = ArrayDeque<Long>()
     fun create(host: String, port: Int): PairingOffer = synchronized(lock) { PairingProtocol.createOffer(host, port, com.mggx.pccontrol.next.v2.DeviceRole.HOME_PHONE).also { active = it } }
     fun consume(secret: String, now: Long = System.currentTimeMillis()): Boolean = synchronized(lock) {
+        while (attempts.firstOrNull()?.let { now - it > 60_000L } == true) attempts.removeFirst()
+        if (attempts.size >= 10) return false
+        attempts.addLast(now)
         val offer = active ?: return false
         val valid = offer.expiresAtEpochMs > now && PairingProtocol.constantTimeEquals(offer.secret, secret)
         if (valid) active = null
