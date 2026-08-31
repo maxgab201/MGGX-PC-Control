@@ -6,8 +6,28 @@ enum class DeviceRole { UNSELECTED, CONTROL_PHONE, HOME_PHONE }
 enum class OnboardingStep {
     WELCOME, ROLE, CONTROL_PREPARE_PHONE, CONTROL_PREPARE_HOME_PHONE,
     HOME_PREPARE_TAILSCALE, HOME_ALWAYS_ON_VPN, HOME_BATTERY,
-    HOME_PAIR_PC, CONTROL_PAIR_HOME, CONTROL_SUNSHINE, CONTROL_MOONLIGHT_LAN,
+    HOME_PAIR_PC, HOME_PAIR_CONTROL, CONTROL_PREPARE_PC, CONTROL_PAIR_HOME, CONTROL_SUNSHINE, CONTROL_MOONLIGHT_LAN,
     CONTROL_MOONLIGHT_TAILSCALE, VERIFY, COMPLETE
+}
+
+data class OnboardingProgress(val current: Int, val total: Int)
+
+object OnboardingFlow {
+    val control = listOf(
+        OnboardingStep.CONTROL_PREPARE_PHONE, OnboardingStep.CONTROL_PREPARE_HOME_PHONE,
+        OnboardingStep.CONTROL_PREPARE_PC, OnboardingStep.CONTROL_PAIR_HOME,
+        OnboardingStep.CONTROL_SUNSHINE, OnboardingStep.CONTROL_MOONLIGHT_LAN,
+        OnboardingStep.CONTROL_MOONLIGHT_TAILSCALE, OnboardingStep.VERIFY,
+    )
+    val home = listOf(
+        OnboardingStep.HOME_PREPARE_TAILSCALE, OnboardingStep.HOME_ALWAYS_ON_VPN,
+        OnboardingStep.HOME_BATTERY, OnboardingStep.HOME_PAIR_PC,
+        OnboardingStep.HOME_PAIR_CONTROL,
+    )
+    fun progress(role: DeviceRole, step: OnboardingStep): OnboardingProgress {
+        val steps = if (role == DeviceRole.HOME_PHONE) home else control
+        return OnboardingProgress((steps.indexOf(step).takeIf { it >= 0 } ?: 0) + 1, steps.size)
+    }
 }
 
 enum class HomeRuntimeState {
@@ -27,8 +47,26 @@ data class HomeDeviceConfig(
     val pcId: String = "main",
     val agentUrl: String = "",
     val agentName: String = "MGGX PC",
+    val lanIp: String = "",
+    val tailscaleIp: String = "",
+    val agentVersion: String = "",
     val wakeOnLan: WakeOnLanConfig = WakeOnLanConfig(),
 )
+
+data class PcPairingData(
+    val agentUrl: String,
+    val agentToken: String,
+    val pcId: String,
+    val name: String,
+    val lanIp: String,
+    val tailscaleIp: String,
+    val agentVersion: String,
+    val macAddress: String,
+    val broadcastAddress: String,
+)
+
+enum class CheckState { PENDING, RUNNING, SUCCESS, FAILURE }
+data class VerificationItem(val id: String, val label: String, val state: CheckState, val detail: String = "")
 
 data class HomeRuntimeSnapshot(
     val state: HomeRuntimeState = HomeRuntimeState.STOPPED,

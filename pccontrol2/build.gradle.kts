@@ -16,8 +16,8 @@ android { namespace = "com.mggx.pccontrol.next"; compileSdk = 36
         applicationId = "com.mggx.pccontrol.next"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "2.0.0-alpha1"
+        versionCode = 2
+        versionName = "2.0.0-alpha2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs { if (stableSigningReady) create("stable") { storeFile = rootProject.file(signingProperties.getProperty("storeFile")); storePassword = signingProperties.getProperty("storePassword"); keyAlias = signingProperties.getProperty("keyAlias"); keyPassword = signingProperties.getProperty("keyPassword") } }
@@ -51,6 +51,12 @@ dependencies {
     implementation("androidx.glance:glance-appwidget:1.1.1")
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.core:core-splashscreen:1.0.1")
+    implementation("androidx.camera:camera-core:1.4.2")
+    implementation("androidx.camera:camera-camera2:1.4.2")
+    implementation("androidx.camera:camera-lifecycle:1.4.2")
+    implementation("androidx.camera:camera-view:1.4.2")
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    implementation("com.google.zxing:core:3.5.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.ktor:ktor-server-core-jvm:3.1.3")
     implementation("io.ktor:ktor-server-cio-jvm:3.1.3")

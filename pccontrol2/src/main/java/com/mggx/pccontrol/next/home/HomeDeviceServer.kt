@@ -35,7 +35,7 @@ import java.util.concurrent.TimeUnit
 data class AgentReply(val code: Int, val body: String)
 
 sealed interface HomeClaimResult {
-    data class Success(val pcId: String, val pcName: String) : HomeClaimResult
+    data class Success(val pcId: String, val pcName: String, val statusBody: String, val lanIp: String, val tailscaleIp: String) : HomeClaimResult
     data class Failure(val message: String) : HomeClaimResult
 }
 
@@ -94,9 +94,18 @@ class HomePairingClient(private val store: NextSettingsStore) {
                 if (controllerToken.isBlank()) return@use HomeClaimResult.Failure("El celular de casa respondió sin una credencial válida.")
                 val pcId = json.optString("pcId", "main").ifBlank { "main" }
                 val pcName = json.optString("name", "MGGX PC").ifBlank { "MGGX PC" }
-                if (!store.savePairedHome(offer.host, offer.port, pcName, controllerToken)) {
+                val lanIp = json.optString("lanIp").trim()
+                val tailscaleIp = json.optString("tailscaleIp").trim()
+                val healthRequest = Request.Builder().url(HttpUrl.Builder().scheme("http").host(offer.host).port(offer.port).addPathSegment("health").build()).build()
+                val statusRequest = Request.Builder().url(HttpUrl.Builder().scheme("http").host(offer.host).port(offer.port).addPathSegments("api/v1/status").build()).header("Authorization", "Bearer $controllerToken").build()
+                val healthOk = client.newCall(healthRequest).execute().use { it.code in 200..299 }
+                val statusReply = client.newCall(statusRequest).execute().use { it.code to it.body?.string().orEmpty() }
+                if (!healthOk) return@use HomeClaimResult.Failure("El celular de casa entregó la credencial, pero /health no respondió.")
+                if (statusReply.first == 401 || statusReply.first == 403) return@use HomeClaimResult.Failure("La credencial recién creada no fue aceptada.")
+                if (statusReply.first !in 200..299 && statusReply.first != 409) return@use HomeClaimResult.Failure("El celular de casa respondió, pero no pudimos comprobar el estado.")
+                if (!store.savePairedHome(offer.host, offer.port, pcName, controllerToken, lanIp, tailscaleIp)) {
                     HomeClaimResult.Failure("No se pudo guardar la vinculación de forma segura.")
-                } else HomeClaimResult.Success(pcId, pcName)
+                } else HomeClaimResult.Success(pcId, pcName, statusReply.second, lanIp, tailscaleIp)
             }
         }.getOrElse { HomeClaimResult.Failure("No encontramos el celular que quedó en casa. Revisá Wi‑Fi y la conexión segura.") }
     }
@@ -116,14 +125,14 @@ class HomePairingSessions {
     private val lock = Any()
     private var active: PairingOffer? = null
     private val attempts = ArrayDeque<Long>()
-    fun create(host: String, port: Int): PairingOffer = synchronized(lock) { PairingProtocol.createOffer(host, port, com.mggx.pccontrol.next.v2.DeviceRole.HOME_PHONE).also { active = it } }
+    fun create(host: String, port: Int, nowMs: Long = System.currentTimeMillis()): PairingOffer = synchronized(lock) { PairingProtocol.createOffer(host, port, com.mggx.pccontrol.next.v2.DeviceRole.HOME_PHONE, nowMs).also { active = it } }
     fun consume(secret: String, now: Long = System.currentTimeMillis()): Boolean = synchronized(lock) {
         while (attempts.firstOrNull()?.let { now - it > 60_000L } == true) attempts.removeFirst()
         if (attempts.size >= 10) return false
         attempts.addLast(now)
         val offer = active ?: return false
         val valid = offer.expiresAtEpochMs > now && PairingProtocol.constantTimeEquals(offer.secret, secret)
-        if (valid) active = null
+        if (valid) { active = null; HomePairingCoordinator.clearIfConsumed(secret) }
         valid
     }
 }
@@ -134,7 +143,7 @@ class HomePairingSessions {
  */
 class HomeDeviceServer(
     private val store: NextSettingsStore,
-    private val sessions: HomePairingSessions = HomePairingSessions(),
+    private val sessions: HomePairingSessions = HomePairingCoordinator.sessions,
 ) {
     private var engine: EmbeddedServer<*, *>? = null
     val isRunning get() = engine != null
@@ -159,7 +168,9 @@ class HomeDeviceServer(
                     val token = randomToken()
                     if (!store.saveHomeControllerToken(token)) { call.respondText("""{"error":"credential_store_failed"}""", ContentType.Application.Json, HttpStatusCode.InternalServerError); return@post }
                     val current = store.snapshot()
-                    call.respondText(JSONObject().put("ok", true).put("pcId", current.home.pcId).put("name", current.home.agentName).put("controllerToken", token).toString(), ContentType.Application.Json)
+                    call.respondText(JSONObject().put("ok", true).put("pcId", current.home.pcId).put("name", current.home.agentName)
+                        .put("lanIp", current.home.lanIp).put("tailscaleIp", current.home.tailscaleIp)
+                        .put("controllerToken", token).toString(), ContentType.Application.Json)
                 }
             }
         }.start(wait = false)
@@ -177,7 +188,24 @@ class HomeDeviceServer(
         is CredentialResult.Value -> config.agentUrl.takeIf { it.isNotBlank() }?.let { HttpAgentGateway(it, token.value) }
         else -> null
     }
-    private suspend fun forwardStatus(config: HomeDeviceConfig): AgentReply = ioGateway(config)?.status() ?: AgentReply(409, """{"error":"pc_agent_not_configured"}""")
+    private suspend fun forwardStatus(config: HomeDeviceConfig): AgentReply {
+        val reply = ioGateway(config)?.status() ?: return AgentReply(409, """{"error":"pc_agent_not_configured"}""")
+        if (reply.code !in 200..299) return reply
+        return runCatching {
+            val source = JSONObject(reply.body)
+            val pc = source.optJSONObject("pc")
+            val power = source.optJSONObject("power")
+            val normalized = JSONObject().put("ok", true).put("apiVersion", source.optInt("apiVersion", 1))
+                .put("pcId", config.pcId).put("name", pc?.optString("machineName")?.ifBlank { config.agentName } ?: config.agentName)
+                .put("state", pc?.optString("state")?.ifBlank { "online" } ?: source.optString("state", "online"))
+                .put("agent", JSONObject().put("reachable", true).put("version", source.optString("agentVersion")).put("uptimeSeconds", pc?.optLong("uptimeSeconds")))
+                .put("sunshine", source.optJSONObject("sunshine") ?: JSONObject.NULL)
+                .put("tailscale", source.optJSONObject("tailscale") ?: JSONObject.NULL)
+                .put("capabilities", JSONObject().put("wake", config.wakeOnLan.macAddress.isNotBlank()).put("shutdown", true).put("restart", true)
+                    .put("sleep", power?.optBoolean("sleepSupported", false)).put("hibernate", power?.optBoolean("hibernateSupported", false)).put("lock", true).put("sunshineRestart", true))
+            AgentReply(200, normalized.toString())
+        }.getOrElse { AgentReply(502, """{"error":"invalid_agent_response"}""") }
+    }
     private suspend fun forwardCommand(config: HomeDeviceConfig, path: String): AgentReply = ioGateway(config)?.command(path) ?: AgentReply(409, """{"error":"pc_agent_not_configured"}""")
     private suspend fun wake(config: HomeDeviceConfig): AgentReply = runCatching {
         val wol = config.wakeOnLan

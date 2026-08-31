@@ -3,12 +3,14 @@ package com.mggx.pccontrol.next.home
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
@@ -45,9 +47,12 @@ class HomeDeviceService : Service() {
     private lateinit var store: NextSettingsStore
     private lateinit var server: HomeDeviceServer
     private var watchdog: Job? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
+    @SuppressLint("WakelockTimeout")
     override fun onCreate() {
         super.onCreate(); store = NextSettingsStore(applicationContext); server = HomeDeviceServer(store)
+        wakeLock = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "mggx:home-connection").apply { setReferenceCounted(false); acquire() }
         createChannel(); startForeground(NOTIFICATION_ID, notification("Iniciando conexión…"))
         scope.launch {
             val config = store.snapshot().home
@@ -57,9 +62,15 @@ class HomeDeviceService : Service() {
         }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_RESTART) scope.launch {
+            server.stop()
+            runCatching { server.start(store.snapshot().home) }
+        }
+        return START_STICKY
+    }
     override fun onBind(intent: Intent?): IBinder? = null
-    override fun onDestroy() { watchdog?.cancel(); server.stop(); scope.cancel(); HomeDeviceRuntime.publish(HomeRuntimeSnapshot()); super.onDestroy() }
+    override fun onDestroy() { watchdog?.cancel(); server.stop(); wakeLock?.takeIf { it.isHeld }?.release(); scope.cancel(); HomeDeviceRuntime.publish(HomeRuntimeSnapshot()); super.onDestroy() }
 
     private suspend fun monitor() {
         while (true) {
@@ -102,8 +113,9 @@ class HomeDeviceService : Service() {
         val text = when (snapshot.state) { HomeRuntimeState.PC_ONLINE -> "Tu PC está disponible para acceso remoto"; HomeRuntimeState.PC_OFFLINE -> "Conexión activa · PC apagada"; HomeRuntimeState.TAILSCALE_UNAVAILABLE -> "Tailscale necesita atención"; HomeRuntimeState.NETWORK_UNAVAILABLE -> "Esperando conexión Wi‑Fi"; HomeRuntimeState.AGENT_AUTH_ERROR -> "Volvé a vincular la PC"; HomeRuntimeState.ERROR -> "La conexión necesita atención"; else -> "Conexión con tu PC activa" }
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text))
     }
-    companion object { private const val CHANNEL = "mggx_pc_control2_home"; private const val NOTIFICATION_ID = 2042
+    companion object { private const val CHANNEL = "mggx_pc_control2_home"; private const val NOTIFICATION_ID = 2042; private const val ACTION_RESTART = "com.mggx.pccontrol.next.RESTART_HOME"
         fun start(context: Context) = ContextCompat.startForegroundService(context, Intent(context, HomeDeviceService::class.java))
+        fun restart(context: Context) = ContextCompat.startForegroundService(context, Intent(context, HomeDeviceService::class.java).setAction(ACTION_RESTART))
     }
 }
 

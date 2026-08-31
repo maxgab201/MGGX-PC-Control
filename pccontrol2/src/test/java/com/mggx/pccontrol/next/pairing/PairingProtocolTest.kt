@@ -30,4 +30,20 @@ class PairingProtocolTest {
         assertTrue(!sessions.consume(offer.secret, offer.expiresAtEpochMs - 1))
         assertTrue(!PairingProtocol.constantTimeEquals(offer.secret, offer.humanCode()))
     }
+
+    @Test fun scannerRejectsWrongRoleAndInvalidSecret() {
+        val control = PairingProtocol.createOffer("100.64.1.2", 8765, DeviceRole.CONTROL_PHONE, nowMs = 10)
+        assertTrue(validatePairingQr(control.qrUri(), PairingQrKind.HOME_PHONE).isFailure)
+        val invalid = "mggx://pair/v1?host=100.64.1.2&port=8765&secret=short&expires=999999&role=home_phone"
+        assertTrue(validatePairingQr(invalid, PairingQrKind.HOME_PHONE).isFailure)
+    }
+
+    @Test fun regenerationInvalidatesOldOfferAndKeepsNewOneSingleUse() {
+        val sessions = com.mggx.pccontrol.next.home.HomePairingSessions()
+        val first = sessions.create("100.64.1.2", 8765, nowMs = 1_000)
+        val second = sessions.create("100.64.1.2", 8765, nowMs = 2_000)
+        assertTrue(!sessions.consume(first.secret, 2_001))
+        assertTrue(sessions.consume(second.secret, 2_001))
+        assertTrue(!sessions.consume(second.secret, 2_001))
+    }
 }

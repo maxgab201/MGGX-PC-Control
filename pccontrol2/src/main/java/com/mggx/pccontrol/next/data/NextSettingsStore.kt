@@ -35,7 +35,8 @@ class NextSettingsStore(private val context: Context) {
     private object Key {
         val role = stringPreferencesKey("role"); val step = stringPreferencesKey("step"); val complete = booleanPreferencesKey("complete")
         val homeEnabled = booleanPreferencesKey("home_enabled"); val homePort = intPreferencesKey("home_port"); val agentUrl = stringPreferencesKey("agent_url")
-        val pcId = stringPreferencesKey("pc_id"); val pcName = stringPreferencesKey("pc_name"); val wolMac = stringPreferencesKey("wol_mac"); val wolBroadcast = stringPreferencesKey("wol_broadcast"); val wolPort = intPreferencesKey("wol_port")
+        val pcId = stringPreferencesKey("pc_id"); val pcName = stringPreferencesKey("pc_name"); val lanIp = stringPreferencesKey("pc_lan_ip"); val tailscaleIp = stringPreferencesKey("pc_tailscale_ip"); val agentVersion = stringPreferencesKey("agent_version")
+        val wolMac = stringPreferencesKey("wol_mac"); val wolBroadcast = stringPreferencesKey("wol_broadcast"); val wolPort = intPreferencesKey("wol_port")
         val pairedHost = stringPreferencesKey("paired_home_host"); val pairedPort = intPreferencesKey("paired_home_port"); val pairedName = stringPreferencesKey("paired_pc_name")
         val legacyUrl = stringPreferencesKey("legacy_url"); val legacyPcId = stringPreferencesKey("legacy_pc_id")
     }
@@ -45,7 +46,13 @@ class NextSettingsStore(private val context: Context) {
         val step = enumOr(p[Key.step], if (role == DeviceRole.UNSELECTED) OnboardingStep.WELCOME else OnboardingStep.ROLE)
         NextSettings(
             role, step, p[Key.complete] ?: false,
-            HomeDeviceConfig(p[Key.homeEnabled] ?: false, p[Key.homePort] ?: 8765, p[Key.pcId] ?: "main", p[Key.agentUrl] ?: "", p[Key.pcName] ?: "MGGX PC", WakeOnLanConfig(p[Key.wolMac] ?: "", p[Key.wolBroadcast] ?: "", p[Key.wolPort] ?: 9)),
+            HomeDeviceConfig(
+                enabled = p[Key.homeEnabled] ?: false, port = p[Key.homePort] ?: 8765,
+                pcId = p[Key.pcId] ?: "main", agentUrl = p[Key.agentUrl] ?: "",
+                agentName = p[Key.pcName] ?: "MGGX PC", lanIp = p[Key.lanIp] ?: "",
+                tailscaleIp = p[Key.tailscaleIp] ?: "", agentVersion = p[Key.agentVersion] ?: "",
+                wakeOnLan = WakeOnLanConfig(p[Key.wolMac] ?: "", p[Key.wolBroadcast] ?: "", p[Key.wolPort] ?: 9),
+            ),
             p[Key.pairedHost] ?: "", p[Key.pairedPort] ?: 8765, p[Key.pairedName] ?: "MGGX PC", p[Key.legacyUrl] ?: "", p[Key.legacyPcId] ?: "main"
         )
     }
@@ -58,17 +65,24 @@ class NextSettingsStore(private val context: Context) {
     suspend fun resumeSetup(step: OnboardingStep) = context.nextDataStore.edit { it[Key.complete] = false; it[Key.step] = step.name }
     suspend fun saveHome(config: HomeDeviceConfig) = context.nextDataStore.edit { p ->
         p[Key.homeEnabled] = config.enabled; p[Key.homePort] = config.port; p[Key.pcId] = config.pcId; p[Key.agentUrl] = config.agentUrl; p[Key.pcName] = config.agentName
+        p[Key.lanIp] = config.lanIp; p[Key.tailscaleIp] = config.tailscaleIp; p[Key.agentVersion] = config.agentVersion
         p[Key.wolMac] = config.wakeOnLan.macAddress; p[Key.wolBroadcast] = config.wakeOnLan.broadcastAddress; p[Key.wolPort] = config.wakeOnLan.udpPort
     }
-    suspend fun savePairedHome(host: String, port: Int, pcName: String, controllerToken: String): Boolean {
+    suspend fun savePairedHome(host: String, port: Int, pcName: String, controllerToken: String, lanIp: String = "", tailscaleIp: String = ""): Boolean {
         if (!credentials.write("home_control", controllerToken)) return false
-        context.nextDataStore.edit { p -> p[Key.pairedHost] = host; p[Key.pairedPort] = port; p[Key.pairedName] = pcName }; return true
+        context.nextDataStore.edit { p -> p[Key.pairedHost] = host; p[Key.pairedPort] = port; p[Key.pairedName] = pcName; p[Key.lanIp] = lanIp; p[Key.tailscaleIp] = tailscaleIp }; return true
     }
     suspend fun saveAgentToken(token: String) = credentials.write("agent", token)
+    suspend fun savePairedAgent(config: HomeDeviceConfig, token: String): Boolean {
+        if (!credentials.write("agent", token.trim())) return false
+        saveHome(config)
+        return true
+    }
     suspend fun saveHomeControllerToken(token: String) = credentials.write("home_controller", token)
     suspend fun readAgentToken() = credentials.read("agent")
     suspend fun readHomeControllerToken() = credentials.read("home_controller")
     suspend fun readPairedHomeToken() = credentials.read("home_control")
+    suspend fun readLegacyToken() = credentials.read("legacy_relay")
     suspend fun saveLegacy(url: String, pcId: String, token: String): Boolean {
         if (!credentials.write("legacy_relay", token.trim())) return false
         context.nextDataStore.edit { p -> p[Key.legacyUrl] = url.trim(); p[Key.legacyPcId] = pcId.trim().ifBlank { "main" } }; return true
