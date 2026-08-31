@@ -45,7 +45,8 @@ object PairingProtocol {
         require(version == PAIRING_PROTOCOL_VERSION) { "Esta versión de MGGX PC Control no es compatible" }
         val values = uri.rawQuery.orEmpty().split('&').filter { it.contains('=') }.associate {
             val (key, value) = it.split('=', limit = 2)
-            key to java.net.URLDecoder.decode(value, Charsets.UTF_8)
+            // String overload is available on Android 8; the Charset overload is API 33.
+            key to java.net.URLDecoder.decode(value, "UTF-8")
         }
         val host = values["host"].orEmpty().trim()
         val port = values["port"]?.toIntOrNull() ?: error("Puerto inválido")
@@ -67,4 +68,4 @@ fun pairingCode(secret: String): String {
     return "%06d".format(number)
 }
 
-private fun String.encode(): String = java.net.URLEncoder.encode(this, Charsets.UTF_8)
+private fun String.encode(): String = java.net.URLEncoder.encode(this, "UTF-8")
