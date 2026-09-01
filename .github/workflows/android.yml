@@ -6,7 +6,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -71,6 +71,24 @@ jobs:
             echo "signing_persistence=$SIGNING_PERSISTENCE"
             echo "two_build_signature_test=not_run_in_this_workflow"
           } > SIGNING_STATUS.txt
+      - name: Publish MGGX PC Control 2 Alpha 3 release
+        if: github.ref == 'refs/heads/pc-control-2-alpha'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES=$(cat <<'EOF'
+          - Fix del crash al mostrar el QR del celular de casa.
+          - Generación de QR optimizada fuera del hilo principal.
+          - Countdown y offer seguros ante expiración, regeneración y consumo.
+          - Compatible con MGGX PC Agent 1.1.
+          EOF
+          )
+          if gh release view v2.0.0-alpha3 >/dev/null 2>&1; then
+            gh release edit v2.0.0-alpha3 --title "MGGX PC Control 2 — Alpha 3" --notes "$NOTES"
+          else
+            gh release create v2.0.0-alpha3 --target "$GITHUB_SHA" --title "MGGX PC Control 2 — Alpha 3" --notes "$NOTES" --prerelease
+          fi
+          gh release upload v2.0.0-alpha3 MGGX-PC-Control-2-alpha3-universal-debug.apk SHA256SUMS.txt --clobber
       - uses: actions/upload-artifact@v4
         with:
           name: MGGX-PC-Control-2-alpha3-universal-debug
