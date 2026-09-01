@@ -126,14 +126,20 @@ class HomePairingSessions {
     private var active: PairingOffer? = null
     private val attempts = ArrayDeque<Long>()
     fun create(host: String, port: Int, nowMs: Long = System.currentTimeMillis()): PairingOffer = synchronized(lock) { PairingProtocol.createOffer(host, port, com.mggx.pccontrol.next.v2.DeviceRole.HOME_PHONE, nowMs).also { active = it } }
-    fun consume(secret: String, now: Long = System.currentTimeMillis()): Boolean = synchronized(lock) {
-        while (attempts.firstOrNull()?.let { now - it > 60_000L } == true) attempts.removeFirst()
-        if (attempts.size >= 10) return false
-        attempts.addLast(now)
-        val offer = active ?: return false
-        val valid = offer.expiresAtEpochMs > now && PairingProtocol.constantTimeEquals(offer.secret, secret)
-        if (valid) { active = null; HomePairingCoordinator.clearIfConsumed(secret) }
-        valid
+    fun consume(secret: String, now: Long = System.currentTimeMillis()): Boolean {
+        val consumed = synchronized(lock) {
+            while (attempts.firstOrNull()?.let { now - it > 60_000L } == true) attempts.removeFirst()
+            if (attempts.size >= 10) return@synchronized false
+            attempts.addLast(now)
+            val offer = active ?: return@synchronized false
+            val valid = offer.expiresAtEpochMs > now && PairingProtocol.constantTimeEquals(offer.secret, secret)
+            if (valid) active = null
+            valid
+        }
+        // Never call the coordinator while holding the session lock: generation takes the locks
+        // in the opposite order and doing so could deadlock claim vs. regeneration.
+        if (consumed) HomePairingCoordinator.clearIfConsumed(secret)
+        return consumed
     }
 }
 

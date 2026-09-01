@@ -59,8 +59,8 @@ jobs:
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print -quit)
           test -x "$APKSIGNER"
           cp "$APK" MGGX-PC-Control-universal-debug-v1.0.2.apk
-          cp "$NEXT_APK" MGGX-PC-Control-2-alpha2-universal-debug.apk
-          sha256sum MGGX-PC-Control-universal-debug-v1.0.2.apk MGGX-PC-Control-2-alpha2-universal-debug.apk > SHA256SUMS.txt
+          cp "$NEXT_APK" MGGX-PC-Control-2-alpha3-universal-debug.apk
+          sha256sum MGGX-PC-Control-universal-debug-v1.0.2.apk MGGX-PC-Control-2-alpha3-universal-debug.apk > SHA256SUMS.txt
           "$APKSIGNER" verify --verbose --print-certs "$APK"
           "$APKSIGNER" verify --verbose --print-certs "$NEXT_APK"
           CERT_SHA256=$("$APKSIGNER" verify --print-certs "$NEXT_APK" | awk -F': ' '/certificate SHA-256 digest/{print $2; exit}')
@@ -73,10 +73,10 @@ jobs:
           } > SIGNING_STATUS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: MGGX-PC-Control-universal-debug-v1.0.2
+          name: MGGX-PC-Control-2-alpha3-universal-debug
           path: |
             MGGX-PC-Control-universal-debug-v1.0.2.apk
-            MGGX-PC-Control-2-alpha2-universal-debug.apk
+            MGGX-PC-Control-2-alpha3-universal-debug.apk
             SHA256SUMS.txt
             SIGNING_STATUS.txt
           if-no-files-found: error

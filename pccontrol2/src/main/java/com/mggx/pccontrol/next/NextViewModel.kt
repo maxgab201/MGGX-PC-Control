@@ -16,6 +16,7 @@ import com.mggx.pccontrol.next.home.HomeDeviceRuntime
 import com.mggx.pccontrol.next.home.HomeDeviceService
 import com.mggx.pccontrol.next.home.HomePairingClient
 import com.mggx.pccontrol.next.home.HomePairingCoordinator
+import com.mggx.pccontrol.next.home.HomeRestoreWorker
 import com.mggx.pccontrol.next.pairing.PairingOffer
 import com.mggx.pccontrol.next.pairing.PcAgentPairingClient
 import com.mggx.pccontrol.next.pairing.PcPairingOffer
@@ -26,6 +27,7 @@ import com.mggx.pccontrol.next.v2.DeviceRole
 import com.mggx.pccontrol.next.v2.OnboardingStep
 import com.mggx.pccontrol.next.v2.VerificationItem
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -33,6 +35,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 sealed interface UiEvent { data object OpenMoonlight : UiEvent; data class Message(val text: String) : UiEvent }
 
@@ -42,7 +45,7 @@ class NextViewModel(application: Application) : AndroidViewModel(application) {
     private val pcPairingClient = PcAgentPairingClient(store)
     val settings = store.settings.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NextSettings())
     val homeRuntime = HomeDeviceRuntime.state
-    val homeOffer = HomePairingCoordinator.offer
+    val homeOfferState = HomePairingCoordinator.state
     private val _busy = MutableStateFlow<String?>(null); val busy = _busy.asStateFlow()
     private val _message = MutableStateFlow<String?>(null); val message = _message.asStateFlow()
     private val _pcInfo = MutableStateFlow<PcInfo?>(null); val pcInfo = _pcInfo.asStateFlow()
@@ -54,12 +57,22 @@ class NextViewModel(application: Application) : AndroidViewModel(application) {
     fun resume(step: OnboardingStep) = viewModelScope.launch { store.resumeSetup(step) }
     fun complete() = viewModelScope.launch { store.complete() }
     fun clearMessage() { _message.value = null }
-    fun startHome() = viewModelScope.launch { val current = store.snapshot(); store.saveHome(current.home.copy(enabled = true)); HomeDeviceService.start(getApplication()) }
+    fun startHome() = viewModelScope.launch {
+        val current = store.snapshot()
+        store.saveHome(current.home.copy(enabled = true))
+        startHomeServiceOrScheduleRestore()
+    }
     fun restartHome() = HomeDeviceService.restart(getApplication())
-    fun generateHomeOffer() = viewModelScope.launch {
-        val result = HomePairingCoordinator.generate(store.snapshot().home.port)
+    fun ensureHomeOffer() = createHomeOffer(force = false)
+    fun generateHomeOffer() = createHomeOffer(force = true)
+    private fun createHomeOffer(force: Boolean) = viewModelScope.launch {
+        val port = store.snapshot().home.port
+        val result = withContext(Dispatchers.IO) {
+            if (force) HomePairingCoordinator.generate(port) else HomePairingCoordinator.ensure(port)
+        }
         _message.value = result.exceptionOrNull()?.message
     }
+    fun markHomeOfferExpired(secret: String) = HomePairingCoordinator.markExpired(secret)
 
     fun claimHome(offer: PairingOffer) = viewModelScope.launch {
         if (_busy.value != null) return@launch
@@ -86,7 +99,11 @@ class NextViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun handlePcPairing(result: PcPairingResult) = when (result) {
-        is PcPairingResult.Success -> { HomeDeviceService.start(getApplication()); store.setStep(OnboardingStep.HOME_PAIR_CONTROL); _message.value = "PC vinculada y comprobada ✓" }
+        is PcPairingResult.Success -> {
+            store.setStep(stepAfterPcPairing(result))
+            startHomeServiceOrScheduleRestore()
+            _message.value = "PC vinculada y comprobada ✓"
+        }
         is PcPairingResult.AgentUpgradeRequired -> _message.value = result.message
         is PcPairingResult.Failure -> _message.value = result.message
     }
@@ -175,7 +192,18 @@ class NextViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun startHomeServiceOrScheduleRestore() {
+        runCatching { HomeDeviceService.start(getApplication<Application>()) }
+            .onFailure {
+                HomeRestoreWorker.enqueue(getApplication())
+                _message.value = "Android pospuso el servicio de conexión. Se reintentará automáticamente."
+            }
+    }
+
     companion object {
+        fun stepAfterPcPairing(result: PcPairingResult): OnboardingStep =
+            if (result is PcPairingResult.Success) OnboardingStep.HOME_PAIR_CONTROL else OnboardingStep.HOME_PAIR_PC
+
         fun defaultChecks() = listOf(
             VerificationItem("tailscale", "Tailscale de este celular", CheckState.PENDING), VerificationItem("home", "Celular en casa", CheckState.PENDING),
             VerificationItem("auth", "Conexión segura", CheckState.PENDING), VerificationItem("agent", "MGGX PC Agent", CheckState.PENDING),

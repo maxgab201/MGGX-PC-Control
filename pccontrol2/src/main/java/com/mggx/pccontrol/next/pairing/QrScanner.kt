@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -28,6 +29,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -46,6 +48,9 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 enum class CameraPermissionState { GRANTED, DENIED }
 fun cameraPermissionState(granted: Boolean) = if (granted) CameraPermissionState.GRANTED else CameraPermissionState.DENIED
@@ -112,14 +117,40 @@ private fun PairingCameraScreen(kind: PairingQrKind, onClose: () -> Unit, onVali
     DisposableEffect(Unit) { onDispose { scanner.close(); executor.shutdownNow() } }
 }
 
-fun qrBitmap(payload: String, size: Int = 720): Bitmap {
+data class QrPixelBuffer(val width: Int, val height: Int, val pixels: IntArray)
+
+internal fun encodeQrPixels(payload: String, size: Int = 720): QrPixelBuffer {
+    require(payload.isNotBlank() && size in 128..1_024)
     val matrix = QRCodeWriter().encode(payload, BarcodeFormat.QR_CODE, size, size)
-    return Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).also { bitmap ->
-        for (x in 0 until size) for (y in 0 until size) bitmap.setPixel(x, y, if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+    val pixels = IntArray(size * size)
+    for (y in 0 until size) {
+        val row = y * size
+        for (x in 0 until size) pixels[row + x] =
+            if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE
     }
+    return QrPixelBuffer(size, size, pixels)
 }
 
+internal suspend fun generateQrPixels(
+    payload: String,
+    size: Int = 720,
+    dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    encoder: (String, Int) -> QrPixelBuffer = ::encodeQrPixels,
+): QrPixelBuffer = withContext(dispatcher) { encoder(payload, size) }
+
+private fun QrPixelBuffer.toBitmap(): Bitmap =
+    Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also {
+        it.setPixels(pixels, 0, width, 0, 0, width, height)
+    }
+
 @Composable fun PairingQr(payload: String, modifier: Modifier = Modifier.fillMaxWidth().height(280.dp)) {
-    val bitmap = remember(payload) { qrBitmap(payload) }
-    Image(bitmap.asImageBitmap(), contentDescription = "Código QR de vinculación", modifier = modifier)
+    val pixelBuffer by produceState<QrPixelBuffer?>(initialValue = null, key1 = payload) {
+        value = generateQrPixels(payload)
+    }
+    val bitmap = remember(pixelBuffer) { pixelBuffer?.toBitmap() }
+    if (bitmap == null) {
+        Box(modifier, contentAlignment = androidx.compose.ui.Alignment.Center) { CircularProgressIndicator() }
+    } else {
+        Image(bitmap.asImageBitmap(), contentDescription = "Código QR de vinculación", modifier = modifier)
+    }
 }

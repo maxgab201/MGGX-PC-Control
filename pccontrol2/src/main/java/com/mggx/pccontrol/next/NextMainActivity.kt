@@ -32,6 +32,7 @@ import com.mggx.pccontrol.next.data.NextSettings
 import com.mggx.pccontrol.next.domain.PcState
 import com.mggx.pccontrol.next.domain.PowerAction
 import com.mggx.pccontrol.next.pairing.*
+import com.mggx.pccontrol.next.home.HomeOfferPhase
 import com.mggx.pccontrol.next.v2.*
 import kotlinx.coroutines.delay
 
@@ -124,10 +125,28 @@ class NextMainActivity : ComponentActivity() {
 }
 
 @Composable private fun HomeControllerOfferStep(settings: NextSettings, vm: NextViewModel) {
-    val offer by vm.homeOffer.collectAsStateWithLifecycle(); var remaining by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(Unit) { vm.startHome(); vm.generateHomeOffer() }; LaunchedEffect(offer) { while (offer != null) { remaining = ((offer!!.expiresAtEpochMs - System.currentTimeMillis()).coerceAtLeast(0) / 1000); if (remaining == 0L) break; delay(1_000) } }
+    val offerState by vm.homeOfferState.collectAsStateWithLifecycle()
+    val activeOffer = offerState.offer
+    var remaining by remember(activeOffer?.secret) { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) { vm.startHome(); vm.ensureHomeOffer() }
+    LaunchedEffect(activeOffer?.secret, offerState.phase) {
+        val countedOffer = activeOffer ?: return@LaunchedEffect
+        if (offerState.phase != HomeOfferPhase.ACTIVE) return@LaunchedEffect
+        while (true) {
+            val countdown = com.mggx.pccontrol.next.home.offerCountdown(countedOffer.expiresAtEpochMs, System.currentTimeMillis())
+            remaining = countdown.remainingSeconds
+            if (countdown.expired) { vm.markHomeOfferExpired(countedOffer.secret); break }
+            delay(1_000)
+        }
+    }
     Heading("Vincular tu celular de uso cotidiano"); Text("Mostrá este código al celular principal. La dirección se obtuvo automáticamente de Tailscale y la credencial es temporal y de un solo uso.")
-    offer?.let { PairingQr(it.qrUri()); Text("Código alternativo: ${it.humanCode()}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text("Vence en ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}") } ?: Text("No hay un código activo. Verificá que Tailscale esté conectado.", color = MaterialTheme.colorScheme.error)
+    when (offerState.phase) {
+        HomeOfferPhase.ACTIVE -> activeOffer?.let { current -> PairingQr(current.qrUri()); Text("Código alternativo: ${current.humanCode()}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text("Vence en ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}") }
+        HomeOfferPhase.EXPIRED -> Text("El código venció. Generá otro para continuar.", color = MaterialTheme.colorScheme.error)
+        HomeOfferPhase.CONSUMED -> Text("El celular principal quedó vinculado ✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+        HomeOfferPhase.ERROR -> Text(offerState.message ?: "No se pudo generar el código.", color = MaterialTheme.colorScheme.error)
+        HomeOfferPhase.EMPTY -> Text("Preparando un código seguro…")
+    }
     Button(vm::generateHomeOffer, Modifier.fillMaxWidth()) { Text("GENERAR OTRO CÓDIGO") }; Button(vm::complete, Modifier.fillMaxWidth()) { Text("FINALIZAR CONFIGURACIÓN") }; Text("PC vinculada: ${settings.home.agentName}", style = MaterialTheme.typography.bodySmall)
 }
 
@@ -145,7 +164,7 @@ class NextMainActivity : ComponentActivity() {
     confirm?.let { action -> AlertDialog(onDismissRequest = { confirm = null }, title = { Text("¿${action.name.lowercase().replaceFirstChar { it.uppercase() }} ${settings.pairedPcName}?") }, text = { Text("La conexión remota puede cerrarse.") }, dismissButton = { TextButton({ confirm = null }) { Text("CANCELAR") } }, confirmButton = { Button({ confirm = null; vm.command(action) }) { Text("CONFIRMAR") } }) }
 }
 
-@Composable private fun HomeDashboard(settings: NextSettings, vm: NextViewModel) { val runtime by vm.homeRuntime.collectAsState(); val offer by vm.homeOffer.collectAsStateWithLifecycle(); DashboardShell("Este celular mantiene tu PC disponible", Icons.Default.Home) { Text("Dejalo conectado al cargador y al Wi‑Fi."); StatusRow("Servicio", if (runtime.serverRunning) "Activo ✓" else "Detenido"); StatusRow("Wi‑Fi", if (runtime.wifiAvailable) "Conectado" else "Sin conexión"); StatusRow("Tailscale", if (runtime.vpnActive) "VPN activa" else "Revisar"); StatusRow("PC", runtime.state.name.replace('_', ' ')); StatusRow("MGGX PC Agent", status(runtime.agentReachable)); Button(vm::restartHome, Modifier.fillMaxWidth()) { Text("REINICIAR CONEXIÓN") }; Button(vm::generateHomeOffer, Modifier.fillMaxWidth()) { Text("MOSTRAR CÓDIGO PARA VINCULAR OTRO CELULAR") }; offer?.let { PairingQr(it.qrUri()); Text("Código ${it.humanCode()}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }; Text("PC vinculada: ${settings.home.agentName}") } }
+@Composable private fun HomeDashboard(settings: NextSettings, vm: NextViewModel) { val runtime by vm.homeRuntime.collectAsState(); val offerState by vm.homeOfferState.collectAsStateWithLifecycle(); DashboardShell("Este celular mantiene tu PC disponible", Icons.Default.Home) { Text("Dejalo conectado al cargador y al Wi‑Fi."); StatusRow("Servicio", if (runtime.serverRunning) "Activo ✓" else "Detenido"); StatusRow("Wi‑Fi", if (runtime.wifiAvailable) "Conectado" else "Sin conexión"); StatusRow("Tailscale", if (runtime.vpnActive) "VPN activa" else "Revisar"); StatusRow("PC", runtime.state.name.replace('_', ' ')); StatusRow("MGGX PC Agent", status(runtime.agentReachable)); Button(vm::restartHome, Modifier.fillMaxWidth()) { Text("REINICIAR CONEXIÓN") }; Button(vm::generateHomeOffer, Modifier.fillMaxWidth()) { Text("MOSTRAR CÓDIGO PARA VINCULAR OTRO CELULAR") }; if (offerState.phase == HomeOfferPhase.ACTIVE) offerState.offer?.let { PairingQr(it.qrUri()); Text("Código ${it.humanCode()}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }; offerState.message?.let { Text(it) }; Text("PC vinculada: ${settings.home.agentName}") } }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun DashboardShell(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, content: @Composable () -> Unit) = Scaffold(topBar = { TopAppBar(title = { Text(title) }, navigationIcon = { Icon(icon, null, Modifier.padding(12.dp)) }) }) { padding -> LazyColumn(Modifier.fillMaxSize().padding(padding).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) { item { Column(verticalArrangement = Arrangement.spacedBy(14.dp)) { content() } } } }
