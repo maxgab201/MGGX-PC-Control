@@ -28,7 +28,7 @@ class ScannerLifecycleReproTest {
         compose.setContent {
             MaterialTheme {
                 if (visible.value) {
-                    PairingCameraScreen(PairingQrKind.HOME_DEVICE, onClose = {}, onValid = {})
+                    PairingCameraScreen(PairingQrKind.HOME_PHONE, onClose = {}, onValid = {})
                 }
             }
         }
