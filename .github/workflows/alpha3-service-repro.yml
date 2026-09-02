@@ -1,0 +1,52 @@
+name: Alpha 3 service crash reproduction
+
+on:
+  push:
+    branches: [alpha3-service-repro]
+
+jobs:
+  reproduce:
+    name: API ${{ matrix.api }} Alpha3 cold start
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [33, 35]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: android-actions/setup-android@v3
+      - name: Enable KVM
+        run: if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+      - name: Reproduce unmodified Alpha 3 service startup
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          emulator-boot-timeout: 420
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
+          script: |
+            set -e
+            ./gradlew :pccontrol2:assembleDebug :pccontrol2:assembleDebugAndroidTest --stacktrace
+            adb install -r pccontrol2/build/outputs/apk/debug/pccontrol2-debug.apk
+            adb install -r pccontrol2/build/outputs/apk/androidTest/debug/pccontrol2-debug-androidTest.apk
+            adb shell am instrument -w -e class com.mggx.pccontrol.next.Alpha3HomeColdStartSeedTest#seedPersistedHomePairControlOnly com.mggx.pccontrol.next.test/androidx.test.runner.AndroidJUnitRunner
+            adb shell am force-stop com.mggx.pccontrol.next
+            if [ "${{ matrix.api }}" -ge 33 ]; then adb shell pm revoke com.mggx.pccontrol.next android.permission.POST_NOTIFICATIONS || true; fi
+            adb logcat -c
+            adb shell am start -W -n com.mggx.pccontrol.next/.NextMainActivity || true
+            sleep 12
+            adb logcat -d -v threadtime > alpha3-service-logcat-api${{ matrix.api }}.txt
+            grep -n -A100 -B30 -E 'FATAL EXCEPTION|AndroidRuntime|InvalidForegroundServiceType|HomeDeviceService' alpha3-service-logcat-api${{ matrix.api }}.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: alpha3-service-repro-api${{ matrix.api }}
+          path: alpha3-service-logcat-api${{ matrix.api }}.txt
+          if-no-files-found: warn
