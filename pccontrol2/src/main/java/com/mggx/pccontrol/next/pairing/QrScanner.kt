@@ -76,7 +76,7 @@ fun PairingScannerLauncher(kind: PairingQrKind, label: String = "ESCANEAR CÓDIG
 
 @androidx.annotation.OptIn(markerClass = [ExperimentalGetImage::class])
 @Composable
-private fun PairingCameraScreen(kind: PairingQrKind, onClose: () -> Unit, onValid: (ValidatedQr) -> Unit) {
+internal fun PairingCameraScreen(kind: PairingQrKind, onClose: () -> Unit, onValid: (ValidatedQr) -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val executor = remember { Executors.newSingleThreadExecutor() }
