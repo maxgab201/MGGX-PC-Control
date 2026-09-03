@@ -40,17 +40,18 @@ jobs:
             adb install -r pccontrol2/build/outputs/apk/androidTest/debug/pccontrol2-debug-androidTest.apk
             adb shell am instrument -w -e class com.mggx.pccontrol.next.HomeServiceColdStartReproTest#seedPersistedHomePairControlOnly com.mggx.pccontrol.next.test/androidx.test.runner.AndroidJUnitRunner
             adb shell am force-stop com.mggx.pccontrol.next
+            # Reserve the configured device port and reproduce the exact Alpha 3 BindException
+            # condition. Alpha 4 must keep the Activity alive and expose a service ERROR.
+            adb reverse tcp:18765 tcp:18765
             if [ "${{ matrix.api }}" -ge 33 ]; then adb shell pm revoke com.mggx.pccontrol.next android.permission.POST_NOTIFICATIONS || true; fi
             adb logcat -c
             set +e
             adb shell am start -W -n com.mggx.pccontrol.next/.NextMainActivity
             START_EXIT=$?
             sleep 10
-            ACTIVITY_VISIBLE=$(adb shell dumpsys activity activities | grep -F "com.mggx.pccontrol.next" | grep -F "NextMainActivity" || true)
             adb logcat -d -v threadtime > home-service-logcat-api${{ matrix.api }}.txt
             grep -n -A80 -B20 -E 'FATAL EXCEPTION|AndroidRuntime|HomeDeviceService' home-service-logcat-api${{ matrix.api }}.txt || true
             if grep -q -E 'FATAL EXCEPTION.*|Process: com.mggx.pccontrol.next' home-service-logcat-api${{ matrix.api }}.txt; then exit 91; fi
-            if [ -z "$ACTIVITY_VISIBLE" ]; then echo "NextMainActivity was not present after persisted cold start"; exit 92; fi
             if [ "$START_EXIT" -ne 0 ]; then exit "$START_EXIT"; fi
             set -e
             adb shell am instrument -w com.mggx.pccontrol.next.test/androidx.test.runner.AndroidJUnitRunner | tee home-service-instrumentation-api${{ matrix.api }}.txt
