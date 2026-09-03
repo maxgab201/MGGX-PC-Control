@@ -38,8 +38,7 @@ jobs:
             adb install -r pccontrol2/build/outputs/apk/androidTest/debug/pccontrol2-debug-androidTest.apk
             adb shell am instrument -w -e class com.mggx.pccontrol.next.Alpha3HomeColdStartSeedTest#seedPersistedHomePairControlOnly com.mggx.pccontrol.next.test/androidx.test.runner.AndroidJUnitRunner
             adb shell am force-stop com.mggx.pccontrol.next
-            adb shell 'nohup toybox nc -l -p 8765 </dev/null >/dev/null 2>&1 &'
-            sleep 2
+            adb reverse tcp:8765 tcp:8765
             if [ "${{ matrix.api }}" -ge 33 ]; then adb shell pm revoke com.mggx.pccontrol.next android.permission.POST_NOTIFICATIONS || true; fi
             adb logcat -c
             adb shell am start -W -n com.mggx.pccontrol.next/.NextMainActivity || true
