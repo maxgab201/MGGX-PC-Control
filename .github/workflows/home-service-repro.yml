@@ -46,11 +46,11 @@ jobs:
             adb shell am start -W -n com.mggx.pccontrol.next/.NextMainActivity
             START_EXIT=$?
             sleep 10
-            APP_PID=$(adb shell ps -A | awk '$NF == "com.mggx.pccontrol.next" { print $2 }' | tr -d '\r')
+            ACTIVITY_VISIBLE=$(adb shell dumpsys activity activities | grep -F "com.mggx.pccontrol.next/.NextMainActivity" || true)
             adb logcat -d -v threadtime > home-service-logcat-api${{ matrix.api }}.txt
             grep -n -A80 -B20 -E 'FATAL EXCEPTION|AndroidRuntime|HomeDeviceService' home-service-logcat-api${{ matrix.api }}.txt || true
             if grep -q -E 'FATAL EXCEPTION.*|Process: com.mggx.pccontrol.next' home-service-logcat-api${{ matrix.api }}.txt; then exit 91; fi
-            if [ -z "$APP_PID" ]; then echo "App process died during persisted cold start"; exit 92; fi
+            if [ -z "$ACTIVITY_VISIBLE" ]; then echo "NextMainActivity was not present after persisted cold start"; exit 92; fi
             if [ "$START_EXIT" -ne 0 ]; then exit "$START_EXIT"; fi
             set -e
             adb shell am instrument -w com.mggx.pccontrol.next.test/androidx.test.runner.AndroidJUnitRunner | tee home-service-instrumentation-api${{ matrix.api }}.txt
