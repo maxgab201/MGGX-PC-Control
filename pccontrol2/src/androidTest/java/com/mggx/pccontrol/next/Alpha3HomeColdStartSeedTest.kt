@@ -32,5 +32,6 @@ class Alpha3HomeColdStartSeedTest {
             "INSTRUMENTATION_ONLY_TOKEN",
         ))
         store.setStep(OnboardingStep.HOME_PAIR_CONTROL)
+        Unit
     }
 }
