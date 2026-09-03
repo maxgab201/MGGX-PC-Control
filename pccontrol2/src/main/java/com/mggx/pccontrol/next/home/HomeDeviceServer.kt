@@ -28,6 +28,8 @@ import org.json.JSONObject
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.TimeUnit
@@ -157,6 +159,10 @@ class HomeDeviceServer(
     suspend fun start(config: HomeDeviceConfig) {
         if (isRunning) return
         require(config.port in 1..65_535)
+        // CIO binds its socket asynchronously after start(wait = false) returns. Without this
+        // synchronous probe, an occupied port escapes the caller's try/catch as an uncaught
+        // DefaultDispatcher exception and kills the whole application process.
+        ensurePortAvailable(config.port)
         engine = embeddedServer(CIO, host = "0.0.0.0", port = config.port) {
             routing {
                 get("/health") { call.respondText("""{"ok":true,"service":"mggx-home-device","version":1}""", ContentType.Application.Json) }
@@ -180,6 +186,13 @@ class HomeDeviceServer(
                 }
             }
         }.start(wait = false)
+    }
+
+    private fun ensurePortAvailable(port: Int) {
+        ServerSocket().use { socket ->
+            socket.reuseAddress = false
+            socket.bind(InetSocketAddress("0.0.0.0", port))
+        }
     }
 
     fun stop() { engine?.stop(500, 2_000); engine = null }
