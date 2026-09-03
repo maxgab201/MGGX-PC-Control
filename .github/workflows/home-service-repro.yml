@@ -46,7 +46,7 @@ jobs:
             adb shell am start -W -n com.mggx.pccontrol.next/.NextMainActivity
             START_EXIT=$?
             sleep 10
-            ACTIVITY_VISIBLE=$(adb shell dumpsys activity activities | grep -F "com.mggx.pccontrol.next/.NextMainActivity" || true)
+            ACTIVITY_VISIBLE=$(adb shell dumpsys activity activities | grep -F "com.mggx.pccontrol.next" | grep -F "NextMainActivity" || true)
             adb logcat -d -v threadtime > home-service-logcat-api${{ matrix.api }}.txt
             grep -n -A80 -B20 -E 'FATAL EXCEPTION|AndroidRuntime|HomeDeviceService' home-service-logcat-api${{ matrix.api }}.txt || true
             if grep -q -E 'FATAL EXCEPTION.*|Process: com.mggx.pccontrol.next' home-service-logcat-api${{ matrix.api }}.txt; then exit 91; fi
