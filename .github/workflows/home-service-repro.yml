@@ -1,0 +1,65 @@
+name: Home service compatibility tests
+
+on:
+  push:
+    branches: [alpha4-diagnostic, pc-control-2-alpha]
+  workflow_dispatch:
+
+jobs:
+  reproduce:
+    name: API ${{ matrix.api }} cold start
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [33, 35]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: android-actions/setup-android@v3
+      - name: Enable KVM
+        run: |
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+      - name: Run persisted HOME_PAIR_CONTROL reproduction
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          emulator-boot-timeout: 420
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -no-metrics
+          script: |
+            set -e
+            ./gradlew :pccontrol2:assembleDebug :pccontrol2:assembleDebugAndroidTest --stacktrace
+            adb install -r pccontrol2/build/outputs/apk/debug/pccontrol2-debug.apk
+            adb install -r pccontrol2/build/outputs/apk/androidTest/debug/pccontrol2-debug-androidTest.apk
+            adb shell am instrument -w -e class com.mggx.pccontrol.next.HomeServiceColdStartReproTest#seedPersistedHomePairControlOnly com.mggx.pccontrol.next.test/androidx.test.runner.AndroidJUnitRunner
+            adb shell am force-stop com.mggx.pccontrol.next
+            if [ "${{ matrix.api }}" -ge 33 ]; then adb shell pm revoke com.mggx.pccontrol.next android.permission.POST_NOTIFICATIONS || true; fi
+            adb logcat -c
+            set +e
+            adb shell am start -W -n com.mggx.pccontrol.next/.NextMainActivity
+            START_EXIT=$?
+            sleep 10
+            APP_PID=$(adb shell ps -A | awk '$NF == "com.mggx.pccontrol.next" { print $2 }' | tr -d '\r')
+            adb logcat -d -v threadtime > home-service-logcat-api${{ matrix.api }}.txt
+            grep -n -A80 -B20 -E 'FATAL EXCEPTION|AndroidRuntime|HomeDeviceService' home-service-logcat-api${{ matrix.api }}.txt || true
+            if grep -q -E 'FATAL EXCEPTION.*|Process: com.mggx.pccontrol.next' home-service-logcat-api${{ matrix.api }}.txt; then exit 91; fi
+            if [ -z "$APP_PID" ]; then echo "App process died during persisted cold start"; exit 92; fi
+            if [ "$START_EXIT" -ne 0 ]; then exit "$START_EXIT"; fi
+            set -e
+            adb shell am instrument -w com.mggx.pccontrol.next.test/androidx.test.runner.AndroidJUnitRunner | tee home-service-instrumentation-api${{ matrix.api }}.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: home-service-repro-api${{ matrix.api }}
+          path: |
+            home-service-logcat-api${{ matrix.api }}.txt
+            home-service-instrumentation-api${{ matrix.api }}.txt
+            pccontrol2/build/reports/androidTests/**
+          if-no-files-found: warn

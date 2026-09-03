@@ -126,6 +126,7 @@ class NextMainActivity : ComponentActivity() {
 
 @Composable private fun HomeControllerOfferStep(settings: NextSettings, vm: NextViewModel) {
     val offerState by vm.homeOfferState.collectAsStateWithLifecycle()
+    val runtime by vm.homeRuntime.collectAsStateWithLifecycle()
     val activeOffer = offerState.offer
     var remaining by remember(activeOffer?.secret) { mutableLongStateOf(0L) }
     LaunchedEffect(Unit) { vm.startHome(); vm.ensureHomeOffer() }
@@ -140,6 +141,13 @@ class NextMainActivity : ComponentActivity() {
         }
     }
     Heading("Vincular tu celular de uso cotidiano"); Text("Mostrá este código al celular principal. La dirección se obtuvo automáticamente de Tailscale y la credencial es temporal y de un solo uso.")
+    if (runtime.state == HomeRuntimeState.ERROR) {
+        Text(
+            runtime.lastError ?: "La conexión de casa no pudo iniciarse. Podés reintentar sin cerrar la app.",
+            color = MaterialTheme.colorScheme.error,
+        )
+        OutlinedButton(vm::restartHome, Modifier.fillMaxWidth()) { Text("REINTENTAR CONEXIÓN") }
+    }
     when (offerState.phase) {
         HomeOfferPhase.ACTIVE -> activeOffer?.let { current -> PairingQr(current.qrUri()); Text("Código alternativo: ${current.humanCode()}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text("Vence en ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}") }
         HomeOfferPhase.EXPIRED -> Text("El código venció. Generá otro para continuar.", color = MaterialTheme.colorScheme.error)

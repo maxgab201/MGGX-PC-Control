@@ -48,6 +48,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -76,12 +77,14 @@ fun PairingScannerLauncher(kind: PairingQrKind, label: String = "ESCANEAR CÓDIG
 
 @androidx.annotation.OptIn(markerClass = [ExperimentalGetImage::class])
 @Composable
-private fun PairingCameraScreen(kind: PairingQrKind, onClose: () -> Unit, onValid: (ValidatedQr) -> Unit) {
+internal fun PairingCameraScreen(kind: PairingQrKind, onClose: () -> Unit, onValid: (ValidatedQr) -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val executor = remember { Executors.newSingleThreadExecutor() }
     val scanner = remember { BarcodeScanning.getClient(BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()) }
     val completed = remember { AtomicBoolean(false) }
+    val boundProvider = remember { AtomicReference<ProcessCameraProvider?>(null) }
+    val boundAnalysis = remember { AtomicReference<ImageAnalysis?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
 
@@ -99,6 +102,8 @@ private fun PairingCameraScreen(kind: PairingQrKind, onClose: () -> Unit, onVali
         val provider = ProcessCameraProvider.getInstance(context).get()
         val preview = androidx.camera.core.Preview.Builder().build().also { it.setSurfaceProvider(view.surfaceProvider) }
         val analysis = ImageAnalysis.Builder().setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build()
+        boundProvider.set(provider)
+        boundAnalysis.set(analysis)
         analysis.setAnalyzer(executor) { imageProxy ->
             val image = imageProxy.image
             if (image == null || completed.get()) { imageProxy.close(); return@setAnalyzer }
@@ -114,7 +119,16 @@ private fun PairingCameraScreen(kind: PairingQrKind, onClose: () -> Unit, onVali
         provider.unbindAll()
         provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
     }
-    DisposableEffect(Unit) { onDispose { scanner.close(); executor.shutdownNow() } }
+    DisposableEffect(Unit) {
+        onDispose {
+            // The Activity remains RESUMED after the scanner dialog closes. Unbind before
+            // terminating its executor or CameraX can submit another frame to a dead executor.
+            boundAnalysis.getAndSet(null)?.clearAnalyzer()
+            boundProvider.getAndSet(null)?.unbindAll()
+            scanner.close()
+            executor.shutdown()
+        }
+    }
 }
 
 data class QrPixelBuffer(val width: Int, val height: Int, val pixels: IntArray)
