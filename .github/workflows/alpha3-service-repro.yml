@@ -40,7 +40,7 @@ jobs:
             adb shell am force-stop com.mggx.pccontrol.next
             adb reverse tcp:8765 tcp:8765
             if [ "${{ matrix.api }}" -ge 33 ]; then adb shell pm revoke com.mggx.pccontrol.next android.permission.POST_NOTIFICATIONS || true; fi
-            adb logcat -c
+            adb logcat -c || true
             adb shell am start -W -n com.mggx.pccontrol.next/.NextMainActivity || true
             sleep 12
             adb logcat -d -v threadtime > alpha3-service-logcat-api${{ matrix.api }}.txt
