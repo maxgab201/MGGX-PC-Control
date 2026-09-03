@@ -13,6 +13,7 @@ import com.mggx.pccontrol.next.v2.DeviceRole
 import com.mggx.pccontrol.next.v2.HomeDeviceConfig
 import com.mggx.pccontrol.next.v2.HomeRuntimeState
 import com.mggx.pccontrol.next.v2.OnboardingStep
+import com.mggx.pccontrol.next.v2.WakeOnLanConfig
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -36,7 +37,7 @@ class HomeServiceColdStartReproTest {
         runBlocking {
             val store = NextSettingsStore(context)
             store.selectRole(DeviceRole.HOME_PHONE)
-            store.saveHome(HomeDeviceConfig(enabled = true, port = 18765))
+            seedPairedAgent(store, 18765)
             store.setStep(OnboardingStep.HOME_PAIR_CONTROL)
         }
     }
@@ -46,7 +47,7 @@ class HomeServiceColdStartReproTest {
         runBlocking {
             val store = NextSettingsStore(context)
             store.selectRole(DeviceRole.HOME_PHONE)
-            store.saveHome(HomeDeviceConfig(enabled = true, port = 18765))
+            seedPairedAgent(store, 18765)
             store.setStep(OnboardingStep.HOME_PAIR_CONTROL)
 
             ContextCompat.startForegroundService(context, Intent(context, HomeDeviceService::class.java))
@@ -90,5 +91,28 @@ class HomeServiceColdStartReproTest {
             delay(2_000)
             assertNotNull(HomeDeviceRuntime.state.value)
         }
+    }
+
+    private suspend fun seedPairedAgent(store: NextSettingsStore, port: Int) {
+        check(
+            store.savePairedAgent(
+                HomeDeviceConfig(
+                    enabled = true,
+                    port = port,
+                    pcId = "main",
+                    agentUrl = "http://192.0.2.10:8766",
+                    agentName = "MGGX PC",
+                    lanIp = "192.0.2.10",
+                    tailscaleIp = "100.64.0.10",
+                    agentVersion = "1.1.0",
+                    wakeOnLan = WakeOnLanConfig(
+                        "02:00:00:00:00:01",
+                        "192.0.2.255",
+                        9,
+                    ),
+                ),
+                "INSTRUMENTATION_ONLY_TOKEN",
+            ),
+        )
     }
 }
