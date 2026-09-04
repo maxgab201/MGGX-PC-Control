@@ -16,8 +16,8 @@ android { namespace = "com.mggx.pccontrol.next"; compileSdk = 36
         applicationId = "com.mggx.pccontrol.next"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "2.0.0-alpha4"
+        versionCode = 5
+        versionName = "2.0.0-alpha5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs { if (stableSigningReady) create("stable") { storeFile = rootProject.file(signingProperties.getProperty("storeFile")); storePassword = signingProperties.getProperty("storePassword"); keyAlias = signingProperties.getProperty("keyAlias"); keyPassword = signingProperties.getProperty("keyPassword") } }

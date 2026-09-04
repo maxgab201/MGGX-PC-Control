@@ -35,6 +35,9 @@ enum class HomeRuntimeState {
     PC_OFFLINE, PC_ONLINE, AGENT_AUTH_ERROR, ERROR
 }
 
+/** State of the HTTP listener itself. A non-null Ktor engine is not enough evidence. */
+enum class HomeServerState { STOPPED, STARTING, READY, ERROR }
+
 data class WakeOnLanConfig(
     val macAddress: String = "",
     val broadcastAddress: String = "",
@@ -71,6 +74,10 @@ data class VerificationItem(val id: String, val label: String, val state: CheckS
 data class HomeRuntimeSnapshot(
     val state: HomeRuntimeState = HomeRuntimeState.STOPPED,
     val serverRunning: Boolean = false,
+    val serverState: HomeServerState = HomeServerState.STOPPED,
+    val localHealth: Boolean = false,
+    val serverPort: Int? = null,
+    val tailscaleIp: String? = null,
     val wifiAvailable: Boolean = false,
     val vpnActive: Boolean = false,
     val agentReachable: Boolean? = null,

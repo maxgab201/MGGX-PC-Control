@@ -18,6 +18,9 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.HttpUrl
@@ -29,7 +32,11 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.ConnectException
+import java.net.NoRouteToHostException
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.TimeUnit
@@ -90,7 +97,8 @@ class HomePairingClient(private val store: NextSettingsStore) {
             client.newCall(request).execute().use { response ->
                 val responseBody = response.body?.string().orEmpty()
                 if (response.code == 401) return@use HomeClaimResult.Failure("El código venció o ya fue usado. Generá uno nuevo en el celular de casa.")
-                if (response.code !in 200..299) return@use HomeClaimResult.Failure("No se pudo vincular el celular de casa. Revisá que esté encendido y con la conexión segura activa.")
+                if (response.code >= 500) return@use HomeClaimResult.Failure("El celular de casa respondió con un error interno (${response.code}).")
+                if (response.code !in 200..299) return@use HomeClaimResult.Failure("El celular de casa rechazó la vinculación (${response.code}).")
                 val json = JSONObject(responseBody)
                 val controllerToken = json.optString("controllerToken").trim()
                 if (controllerToken.isBlank()) return@use HomeClaimResult.Failure("El celular de casa respondió sin una credencial válida.")
@@ -109,8 +117,16 @@ class HomePairingClient(private val store: NextSettingsStore) {
                     HomeClaimResult.Failure("No se pudo guardar la vinculación de forma segura.")
                 } else HomeClaimResult.Success(pcId, pcName, statusReply.second, lanIp, tailscaleIp)
             }
-        }.getOrElse { HomeClaimResult.Failure("No encontramos el celular que quedó en casa. Revisá Wi‑Fi y la conexión segura.") }
+        }.getOrElse { error -> HomeClaimResult.Failure(homeClaimNetworkMessage(error, offer.host, offer.port)) }
     }
+}
+
+internal fun homeClaimNetworkMessage(error: Throwable, host: String, port: Int): String = when (error) {
+    is SocketTimeoutException -> "Se agotó el tiempo al contactar $host:$port. Revisá la conexión segura."
+    is UnknownHostException -> "No pudimos resolver $host. Revisá la dirección del celular de casa."
+    is NoRouteToHostException -> "No hay ruta hacia $host:$port. Revisá Tailscale en ambos celulares."
+    is ConnectException -> if (error.message.orEmpty().contains("refused", ignoreCase = true)) "El celular de casa está disponible, pero su servicio no responde en $host:$port." else "No se pudo conectar a $host:$port. Revisá Wi‑Fi y Tailscale."
+    else -> "No se pudo contactar el celular de casa en $host:$port (${error.javaClass.simpleName})."
 }
 
 object WakeOnLanSender {
@@ -143,6 +159,7 @@ class HomePairingSessions {
         if (consumed) HomePairingCoordinator.clearIfConsumed(secret)
         return consumed
     }
+    fun clear() = synchronized(lock) { active = null }
 }
 
 /**
@@ -153,17 +170,25 @@ class HomeDeviceServer(
     private val store: NextSettingsStore,
     private val sessions: HomePairingSessions = HomePairingCoordinator.sessions,
 ) {
+    private val lifecycle = Mutex()
     private var engine: EmbeddedServer<*, *>? = null
-    val isRunning get() = engine != null
+    @Volatile private var ready = false
+    @Volatile private var lastStartError: String? = null
+    val isRunning get() = ready
+    val error get() = lastStartError
 
     suspend fun start(config: HomeDeviceConfig) {
-        if (isRunning) return
-        require(config.port in 1..65_535)
-        // CIO binds its socket asynchronously after start(wait = false) returns. Without this
-        // synchronous probe, an occupied port escapes the caller's try/catch as an uncaught
-        // DefaultDispatcher exception and kills the whole application process.
-        ensurePortAvailable(config.port)
-        engine = embeddedServer(CIO, host = "0.0.0.0", port = config.port) {
+        lifecycle.withLock {
+            if (ready && localHealth(config.port)) return
+            stopLocked()
+            require(config.port in 1..65_535)
+            ready = false
+            lastStartError = null
+            // CIO binds its socket asynchronously after start(wait = false) returns. Without this
+            // synchronous probe, an occupied port escapes the caller's try/catch as an uncaught
+            // DefaultDispatcher exception and kills the whole application process.
+            ensurePortAvailable(config.port)
+            engine = embeddedServer(CIO, host = "0.0.0.0", port = config.port) {
             routing {
                 get("/health") { call.respondText("""{"ok":true,"service":"mggx-home-device","version":1}""", ContentType.Application.Json) }
                 get("/api/v1/status") { call.authenticated({ token -> controllerAuthorized(token) }) { config -> forwardStatus(config) } }
@@ -185,7 +210,15 @@ class HomeDeviceServer(
                         .put("controllerToken", token).toString(), ContentType.Application.Json)
                 }
             }
-        }.start(wait = false)
+            }.start(wait = false)
+            if (!awaitLocalHealth(config.port)) {
+                val message = "El servidor local no respondió en el puerto ${config.port}."
+                stopLocked()
+                lastStartError = message
+                throw IllegalStateException(message)
+            }
+            ready = true
+        }
     }
 
     private fun ensurePortAvailable(port: Int) {
@@ -195,7 +228,29 @@ class HomeDeviceServer(
         }
     }
 
-    fun stop() { engine?.stop(500, 2_000); engine = null }
+    suspend fun stop() = lifecycle.withLock { stopLocked() }
+    private fun stopLocked() {
+        ready = false
+        runCatching { engine?.stop(500, 2_000) }
+        engine = null
+    }
+    suspend fun localHealth(port: Int): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val health = Request.Builder()
+                .url(HttpUrl.Builder().scheme("http").host("127.0.0.1").port(port).addPathSegment("health").build())
+                .build()
+            localClient.newCall(health).execute().use { response ->
+                response.code in 200..299 && JSONObject(response.body?.string().orEmpty()).optBoolean("ok")
+            }
+        }.getOrDefault(false)
+    }
+    private suspend fun awaitLocalHealth(port: Int): Boolean {
+        repeat(20) {
+            if (localHealth(port)) return true
+            delay(100)
+        }
+        return false
+    }
     fun createControllerOffer(host: String, port: Int): PairingOffer = sessions.create(host, port)
 
     private suspend fun controllerAuthorized(header: String?): Boolean = when (val stored = store.readHomeControllerToken()) {
@@ -240,5 +295,13 @@ class HomeDeviceServer(
         respondText(reply.body, ContentType.Application.Json, HttpStatusCode.fromValue(reply.code))
     }
 }
+
+private val localClient = OkHttpClient.Builder()
+    .connectTimeout(300, TimeUnit.MILLISECONDS)
+    .readTimeout(500, TimeUnit.MILLISECONDS)
+    .callTimeout(800, TimeUnit.MILLISECONDS)
+    .followRedirects(false)
+    .followSslRedirects(false)
+    .build()
 
 private fun randomToken(): String = ByteArray(32).also(SecureRandom()::nextBytes).let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }

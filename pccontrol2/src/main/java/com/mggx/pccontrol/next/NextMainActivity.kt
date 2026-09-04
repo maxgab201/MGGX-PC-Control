@@ -149,13 +149,13 @@ class NextMainActivity : ComponentActivity() {
         OutlinedButton(vm::restartHome, Modifier.fillMaxWidth()) { Text("REINTENTAR CONEXIÓN") }
     }
     when (offerState.phase) {
-        HomeOfferPhase.ACTIVE -> activeOffer?.let { current -> PairingQr(current.qrUri()); Text("Código alternativo: ${current.humanCode()}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text("Vence en ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}") }
+        HomeOfferPhase.ACTIVE -> if (runtime.serverState == HomeServerState.READY && runtime.localHealth) activeOffer?.let { current -> PairingQr(current.qrUri()); Text("Código alternativo: ${current.humanCode()}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text("Vence en ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}") } else Text("El servidor local ya no está listo. Volvé a intentar la conexión.", color = MaterialTheme.colorScheme.error)
         HomeOfferPhase.EXPIRED -> Text("El código venció. Generá otro para continuar.", color = MaterialTheme.colorScheme.error)
         HomeOfferPhase.CONSUMED -> Text("El celular principal quedó vinculado ✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
         HomeOfferPhase.ERROR -> Text(offerState.message ?: "No se pudo generar el código.", color = MaterialTheme.colorScheme.error)
         HomeOfferPhase.EMPTY -> Text("Preparando un código seguro…")
     }
-    Button(vm::generateHomeOffer, Modifier.fillMaxWidth()) { Text("GENERAR OTRO CÓDIGO") }; Button(vm::complete, Modifier.fillMaxWidth()) { Text("FINALIZAR CONFIGURACIÓN") }; Text("PC vinculada: ${settings.home.agentName}", style = MaterialTheme.typography.bodySmall)
+    Button(vm::generateHomeOffer, Modifier.fillMaxWidth(), enabled = runtime.serverState == HomeServerState.READY && runtime.localHealth) { Text("GENERAR OTRO CÓDIGO") }; Button(vm::complete, Modifier.fillMaxWidth()) { Text("FINALIZAR CONFIGURACIÓN") }; Text("PC vinculada: ${settings.home.agentName}", style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable private fun MoonlightLanStep(settings: NextSettings, vm: NextViewModel) { val context = LocalContext.current; val clipboard = LocalClipboardManager.current; val ip = settings.home.lanIp; Heading("Primero conectaremos Moonlight dentro de tu casa"); AddressBlock("IP 1 — Red local", ip, clipboard); Text("Abrí Moonlight, tocá +, pegá esta dirección y tocá Agregar. Moonlight mostrará un PIN: no cierres esa pantalla. En la PC abrí la notificación de Sunshine, iniciá sesión con el usuario y contraseña que creaste, ingresá el PIN, elegí un nombre para este celular y guardá."); OutlinedButton({ openPackage(context, MOONLIGHT_PACKAGE) }, Modifier.fillMaxWidth(), enabled = ip.isNotBlank()) { Text("ABRIR MOONLIGHT") }; Button({ vm.next(OnboardingStep.CONTROL_MOONLIGHT_TAILSCALE) }, Modifier.fillMaxWidth(), enabled = ip.isNotBlank()) { Text("YA VINCULÉ LA IP LOCAL") } }
@@ -172,7 +172,29 @@ class NextMainActivity : ComponentActivity() {
     confirm?.let { action -> AlertDialog(onDismissRequest = { confirm = null }, title = { Text("¿${action.name.lowercase().replaceFirstChar { it.uppercase() }} ${settings.pairedPcName}?") }, text = { Text("La conexión remota puede cerrarse.") }, dismissButton = { TextButton({ confirm = null }) { Text("CANCELAR") } }, confirmButton = { Button({ confirm = null; vm.command(action) }) { Text("CONFIRMAR") } }) }
 }
 
-@Composable private fun HomeDashboard(settings: NextSettings, vm: NextViewModel) { val runtime by vm.homeRuntime.collectAsState(); val offerState by vm.homeOfferState.collectAsStateWithLifecycle(); DashboardShell("Este celular mantiene tu PC disponible", Icons.Default.Home) { Text("Dejalo conectado al cargador y al Wi‑Fi."); StatusRow("Servicio", if (runtime.serverRunning) "Activo ✓" else "Detenido"); StatusRow("Wi‑Fi", if (runtime.wifiAvailable) "Conectado" else "Sin conexión"); StatusRow("Tailscale", if (runtime.vpnActive) "VPN activa" else "Revisar"); StatusRow("PC", runtime.state.name.replace('_', ' ')); StatusRow("MGGX PC Agent", status(runtime.agentReachable)); Button(vm::restartHome, Modifier.fillMaxWidth()) { Text("REINICIAR CONEXIÓN") }; Button(vm::generateHomeOffer, Modifier.fillMaxWidth()) { Text("MOSTRAR CÓDIGO PARA VINCULAR OTRO CELULAR") }; if (offerState.phase == HomeOfferPhase.ACTIVE) offerState.offer?.let { PairingQr(it.qrUri()); Text("Código ${it.humanCode()}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }; offerState.message?.let { Text(it) }; Text("PC vinculada: ${settings.home.agentName}") } }
+@Composable private fun HomeDashboard(settings: NextSettings, vm: NextViewModel) {
+    val runtime by vm.homeRuntime.collectAsStateWithLifecycle()
+    val offerState by vm.homeOfferState.collectAsStateWithLifecycle()
+    val serverReady = runtime.serverState == HomeServerState.READY && runtime.localHealth
+    LaunchedEffect(settings.home.enabled) { if (settings.home.enabled) vm.ensureHomeServiceRunning() }
+    DashboardShell("Este celular mantiene tu PC disponible", Icons.Default.Home) {
+        Text("Dejalo conectado al cargador y al Wi‑Fi.")
+        StatusRow("Servicio", if (serverReady) "Activo ✓" else runtime.serverState.name.replace('_', ' '))
+        StatusRow("Wi‑Fi", if (runtime.wifiAvailable) "Conectado" else "Sin conexión")
+        StatusRow("Tailscale", runtime.tailscaleIp?.let { "Conectado · $it" } ?: "Revisar")
+        StatusRow("Servidor", runtime.serverPort?.let { "Puerto $it" } ?: "Sin datos")
+        StatusRow("/health local", if (runtime.localHealth) "OK ✓" else "Sin respuesta")
+        StatusRow("PC", runtime.state.name.replace('_', ' '))
+        StatusRow("MGGX PC Agent", status(runtime.agentReachable))
+        runtime.lastError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        Button(vm::restartHome, Modifier.fillMaxWidth()) { Text("REINTENTAR CONEXIÓN") }
+        Button(vm::generateHomeOffer, Modifier.fillMaxWidth(), enabled = serverReady) { Text("MOSTRAR CÓDIGO PARA VINCULAR OTRO CELULAR") }
+        if (serverReady && offerState.phase == HomeOfferPhase.ACTIVE) offerState.offer?.let { PairingQr(it.qrUri()); Text("Código ${it.humanCode()}", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
+        offerState.message?.let { Text(it, color = if (offerState.phase == HomeOfferPhase.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
+        if (!serverReady) Text("El código se habilita cuando el servidor local responda correctamente.", style = MaterialTheme.typography.bodySmall)
+        Text("PC vinculada: ${settings.home.agentName}")
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable private fun DashboardShell(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, content: @Composable () -> Unit) = Scaffold(topBar = { TopAppBar(title = { Text(title) }, navigationIcon = { Icon(icon, null, Modifier.padding(12.dp)) }) }) { padding -> LazyColumn(Modifier.fillMaxSize().padding(padding).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) { item { Column(verticalArrangement = Arrangement.spacedBy(14.dp)) { content() } } } }

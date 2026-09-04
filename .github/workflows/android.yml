@@ -49,8 +49,8 @@ jobs:
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print -quit)
           test -x "$APKSIGNER"
           cp "$APK" MGGX-PC-Control-universal-debug-v1.0.2.apk
-          cp "$NEXT_APK" MGGX-PC-Control-2-alpha4-universal-debug.apk
-          sha256sum MGGX-PC-Control-universal-debug-v1.0.2.apk MGGX-PC-Control-2-alpha4-universal-debug.apk > SHA256SUMS.txt
+          cp "$NEXT_APK" MGGX-PC-Control-2-alpha5-universal-debug.apk
+          sha256sum MGGX-PC-Control-universal-debug-v1.0.2.apk MGGX-PC-Control-2-alpha5-universal-debug.apk > SHA256SUMS.txt
           "$APKSIGNER" verify --verbose --print-certs "$APK"
           "$APKSIGNER" verify --verbose --print-certs "$NEXT_APK"
           CERT_SHA256=$("$APKSIGNER" verify --print-certs "$NEXT_APK" | awk -F': ' '/certificate SHA-256 digest/{print $2; exit}')
@@ -61,31 +61,31 @@ jobs:
             echo "signing_persistence=$SIGNING_PERSISTENCE"
             echo "two_build_signature_test=not_run_in_this_workflow"
           } > SIGNING_STATUS.txt
-      - name: Publish MGGX PC Control 2 Alpha 4 release
+      - name: Publish MGGX PC Control 2 Alpha 5 release
         if: github.ref == 'refs/heads/pc-control-2-alpha'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           NOTES=$(cat <<'EOF'
-          - Corrige el crash loop al iniciar el servicio del celular de casa.
-          - Inicialización del servicio protegida y errores visibles en la aplicación.
-          - CameraX se desvincula antes de cerrar el scanner para evitar frames sobre un executor finalizado.
-          - Restauración acotada, sin reinicios START_STICKY infinitos.
-          - Compatible con MGGX PC Agent 1.1.
+          - El dashboard inicia y verifica el servicio del celular de casa de forma automática.
+          - El QR sólo se genera después de comprobar /health local.
+          - Lifecycle del servidor serializado: start/restart no pueden competir.
+          - Detección coherente de Wi‑Fi y Tailscale con VPN activa.
+          - Errores de vinculación por capa de red más específicos.
           EOF
           )
-          if gh release view v2.0.0-alpha4 >/dev/null 2>&1; then
-            gh release edit v2.0.0-alpha4 --title "MGGX PC Control 2 — Alpha 4" --notes "$NOTES"
+          if gh release view v2.0.0-alpha5 >/dev/null 2>&1; then
+            gh release edit v2.0.0-alpha5 --title "MGGX PC Control 2 — Alpha 5" --notes "$NOTES"
           else
-            gh release create v2.0.0-alpha4 --target "$GITHUB_SHA" --title "MGGX PC Control 2 — Alpha 4" --notes "$NOTES" --prerelease
+            gh release create v2.0.0-alpha5 --target "$GITHUB_SHA" --title "MGGX PC Control 2 — Alpha 5" --notes "$NOTES" --prerelease
           fi
-          gh release upload v2.0.0-alpha4 MGGX-PC-Control-2-alpha4-universal-debug.apk SHA256SUMS.txt --clobber
+          gh release upload v2.0.0-alpha5 MGGX-PC-Control-2-alpha5-universal-debug.apk SHA256SUMS.txt --clobber
       - uses: actions/upload-artifact@v4
         with:
-          name: MGGX-PC-Control-2-alpha4-universal-debug
+          name: MGGX-PC-Control-2-alpha5-universal-debug
           path: |
             MGGX-PC-Control-universal-debug-v1.0.2.apk
-            MGGX-PC-Control-2-alpha4-universal-debug.apk
+            MGGX-PC-Control-2-alpha5-universal-debug.apk
             SHA256SUMS.txt
             SIGNING_STATUS.txt
           if-no-files-found: error

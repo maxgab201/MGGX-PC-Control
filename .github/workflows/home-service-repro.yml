@@ -2,7 +2,7 @@ name: Home service compatibility tests
 
 on:
   push:
-    branches: [alpha4-diagnostic, pc-control-2-alpha]
+    branches: [alpha4-diagnostic, alpha5-diagnostic, pc-control-2-alpha]
   workflow_dispatch:
 
 jobs:

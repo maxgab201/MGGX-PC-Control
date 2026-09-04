@@ -38,6 +38,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -56,6 +59,7 @@ class HomeDeviceService : Service() {
     private var watchdog: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var initialized = false
+    private val lifecycle = Mutex()
 
     @SuppressLint("WakelockTimeout")
     override fun onCreate() {
@@ -77,15 +81,14 @@ class HomeDeviceService : Service() {
             )?.apply { setReferenceCounted(false); acquire() }
         }
         initialized = true
-        scope.launch { startConfiguredServer() }
+        requestEnsureServer()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (!initialized) return START_NOT_STICKY
-        if (intent?.action == ACTION_RESTART) scope.launch {
-            watchdog?.cancel()
-            runCatching { server?.stop() }.onFailure { fail("server_stop", it) }
-            startConfiguredServer()
+        when (intent?.action) {
+            ACTION_RESTART -> requestRestartServer()
+            else -> requestEnsureServer()
         }
         // BootReceiver/WorkManager restore explicitly. Sticky restarts turned recoverable failures
         // into a persistent process crash loop on some devices.
@@ -94,13 +97,22 @@ class HomeDeviceService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onDestroy() {
         watchdog?.cancel()
-        runCatching { server?.stop() }.onFailure { fail("server_destroy", it) }
+        runCatching { runBlocking { lifecycle.withLock { server?.stop() } } }.onFailure { fail("server_destroy", it) }
         runCatching { wakeLock?.takeIf { it.isHeld }?.release() }.onFailure { fail("wake_lock_release", it) }
+        val previous = HomeDeviceRuntime.state.value
+        HomePairingCoordinator.invalidateForUnavailableServer("El servidor local se detuvo. Tocá Reintentar conexión.")
+        HomeDeviceRuntime.publish(homeSnapshot(HomeRuntimeState.STOPPED, false, false, previous.serverPort, networkState(this)))
         scope.cancel()
         super.onDestroy()
     }
 
-    private suspend fun startConfiguredServer() {
+    private fun requestEnsureServer() = scope.launch { lifecycle.withLock { ensureServerRunningLocked() } }
+    private fun requestRestartServer() = scope.launch { lifecycle.withLock { restartServerLocked() } }
+
+    /** The only lifecycle entry points. Start/stop/restart cannot overlap. */
+    private suspend fun ensureServerRunningLocked() {
+        val knownPort = store?.snapshot()?.home?.port
+        publishServer(HomeRuntimeState.STARTING, false, false, knownPort)
         val currentStore = store ?: return fail("settings_store", IllegalStateException("Store unavailable"))
         val currentServer = server ?: return fail("server_create", IllegalStateException("Server unavailable"))
         val config = try {
@@ -110,7 +122,7 @@ class HomeDeviceService : Service() {
             fail("settings_read", error)
             return
         }
-        if (!config.enabled) { stopSelf(); return }
+        if (!config.enabled) { currentServer.stop(); publishServer(HomeRuntimeState.STOPPED, false, false, config.port); stopSelf(); return }
         try {
             currentServer.start(config)
         } catch (error: Throwable) {
@@ -118,7 +130,23 @@ class HomeDeviceService : Service() {
             fail("server_start", error, "No se pudo iniciar la conexión. El puerto puede estar ocupado.")
             return
         }
+        val network = networkState(this)
+        publishServer(HomeRuntimeState.READY, true, true, config.port, network)
+        watchdog?.cancel()
         watchdog = scope.launch { monitor() }
+    }
+
+    private suspend fun restartServerLocked() {
+        watchdog?.cancel()
+        val current = server
+        try {
+            current?.stop()
+        } catch (error: Throwable) {
+            if (error.isFatal()) throw error
+            fail("server_stop", error)
+        }
+        HomePairingCoordinator.invalidateForUnavailableServer("La conexión se está reiniciando. Generá el código nuevamente cuando esté lista.")
+        ensureServerRunningLocked()
     }
 
     private suspend fun monitor() {
@@ -127,10 +155,13 @@ class HomeDeviceService : Service() {
             val config = store?.snapshot()?.home ?: return
             val currentServer = server
             val base = when {
-                currentServer?.isRunning != true -> HomeRuntimeSnapshot(HomeRuntimeState.ERROR, false, network.first, network.second, lastError = "Servicio detenido")
-                !network.first -> HomeRuntimeSnapshot(HomeRuntimeState.NETWORK_UNAVAILABLE, true, false, network.second)
-                !network.second -> HomeRuntimeSnapshot(HomeRuntimeState.TAILSCALE_UNAVAILABLE, true, true, false)
-                else -> checkAgent(config, network.first, network.second)
+                currentServer?.isRunning != true || !currentServer.localHealth(config.port) -> {
+                    HomePairingCoordinator.invalidateForUnavailableServer("El servidor local se detuvo. Tocá Reintentar conexión.")
+                    homeSnapshot(HomeRuntimeState.ERROR, false, false, config.port, network, lastError = currentServer?.error ?: "El servidor local no responde")
+                }
+                !network.wifiAvailable -> homeSnapshot(HomeRuntimeState.NETWORK_UNAVAILABLE, true, true, config.port, network)
+                !network.tailscaleAvailable -> homeSnapshot(HomeRuntimeState.TAILSCALE_UNAVAILABLE, true, true, config.port, network)
+                else -> checkAgent(config, network)
             }
             HomeDeviceRuntime.publish(base)
             updateNotification(base)
@@ -138,21 +169,21 @@ class HomeDeviceService : Service() {
         }
     }
 
-    private suspend fun checkAgent(config: com.mggx.pccontrol.next.v2.HomeDeviceConfig, wifi: Boolean, vpn: Boolean): HomeRuntimeSnapshot {
+    private suspend fun checkAgent(config: com.mggx.pccontrol.next.v2.HomeDeviceConfig, network: HomeNetworkState): HomeRuntimeSnapshot {
         val token = store?.readAgentToken() ?: CredentialResult.Missing
-        if (config.agentUrl.isBlank()) return HomeRuntimeSnapshot(HomeRuntimeState.PC_OFFLINE, true, wifi, vpn, null, "Falta vincular la PC")
-        if (token !is CredentialResult.Value) return HomeRuntimeSnapshot(HomeRuntimeState.AGENT_AUTH_ERROR, true, wifi, vpn, false, "Volvé a vincular la PC")
+        if (config.agentUrl.isBlank()) return homeSnapshot(HomeRuntimeState.PC_OFFLINE, true, true, config.port, network, null, "Falta vincular la PC")
+        if (token !is CredentialResult.Value) return homeSnapshot(HomeRuntimeState.AGENT_AUTH_ERROR, true, true, config.port, network, false, "Volvé a vincular la PC")
         return runCatching {
             val reply = HttpAgentGateway(config.agentUrl, token.value).status()
             when (reply.code) {
-                401, 403 -> HomeRuntimeSnapshot(HomeRuntimeState.AGENT_AUTH_ERROR, true, wifi, vpn, false, "La autorización con la PC venció")
+                401, 403 -> homeSnapshot(HomeRuntimeState.AGENT_AUTH_ERROR, true, true, config.port, network, false, "La autorización con la PC venció")
                 in 200..299 -> {
                     val offline = JSONObject(reply.body).optString("state").equals("offline", true)
-                    HomeRuntimeSnapshot(if (offline) HomeRuntimeState.PC_OFFLINE else HomeRuntimeState.PC_ONLINE, true, wifi, vpn, !offline)
+                    homeSnapshot(if (offline) HomeRuntimeState.PC_OFFLINE else HomeRuntimeState.PC_ONLINE, true, true, config.port, network, !offline)
                 }
-                else -> HomeRuntimeSnapshot(HomeRuntimeState.ERROR, true, wifi, vpn, false, "La PC respondió con un error")
+                else -> homeSnapshot(HomeRuntimeState.ERROR, true, true, config.port, network, false, "La PC respondió con un error")
             }
-        }.getOrElse { HomeRuntimeSnapshot(HomeRuntimeState.PC_OFFLINE, true, wifi, vpn, false, "No se pudo contactar la PC") }
+        }.getOrElse { homeSnapshot(HomeRuntimeState.PC_OFFLINE, true, true, config.port, network, false, "No se pudo contactar la PC") }
     }
 
     private fun createChannel() {
@@ -189,12 +220,17 @@ class HomeDeviceService : Service() {
             HomeRuntimeSnapshot(
                 state = HomeRuntimeState.ERROR,
                 serverRunning = false,
+                serverState = com.mggx.pccontrol.next.v2.HomeServerState.ERROR,
                 lastError = "$userMessage (${failure.exceptionType.substringAfterLast('.')})",
             ),
         )
+        HomePairingCoordinator.invalidateForUnavailableServer(userMessage)
     }
-    companion object { private const val CHANNEL = "mggx_pc_control2_home"; private const val NOTIFICATION_ID = 2042; private const val ACTION_RESTART = "com.mggx.pccontrol.next.RESTART_HOME"
-        fun start(context: Context) = ContextCompat.startForegroundService(context, Intent(context, HomeDeviceService::class.java))
+    private fun publishServer(state: HomeRuntimeState, running: Boolean, localHealth: Boolean, port: Int?, network: HomeNetworkState = networkState(this)) =
+        HomeDeviceRuntime.publish(homeSnapshot(state, running, localHealth, port, network))
+
+    companion object { private const val CHANNEL = "mggx_pc_control2_home"; private const val NOTIFICATION_ID = 2042; private const val ACTION_START = "com.mggx.pccontrol.next.START_HOME"; private const val ACTION_RESTART = "com.mggx.pccontrol.next.RESTART_HOME"
+        fun start(context: Context) = ContextCompat.startForegroundService(context, Intent(context, HomeDeviceService::class.java).setAction(ACTION_START))
         fun restart(context: Context) = ContextCompat.startForegroundService(context, Intent(context, HomeDeviceService::class.java).setAction(ACTION_RESTART))
     }
 }
@@ -235,13 +271,47 @@ class HomeRestoreWorker(context: Context, params: WorkerParameters) : CoroutineW
     }
 }
 
-private fun networkState(context: Context): Pair<Boolean, Boolean> {
-    val manager = context.getSystemService(ConnectivityManager::class.java) ?: return false to false
-    val active = manager.activeNetwork?.let(manager::getNetworkCapabilities)
-    val wifi = active?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-    val vpn = manager.allNetworks.any { manager.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true }
-    return wifi to vpn
+internal data class HomeNetworkState(val wifiAvailable: Boolean, val tailscaleAvailable: Boolean, val tailscaleIp: String?)
+
+private fun networkState(context: Context): HomeNetworkState {
+    val manager = context.getSystemService(ConnectivityManager::class.java)
+        ?: return HomeNetworkState(false, false, null)
+    // When a VPN is active it becomes activeNetwork, so inspect all transports for the physical Wi‑Fi.
+    val networks = manager.allNetworks.mapNotNull(manager::getNetworkCapabilities)
+    val wifi = networks.any { it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) }
+    val tailnetIp = TailscaleAddressProvider.address()
+    val vpn = tailnetIp != null || networks.any { it.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
+    return HomeNetworkState(wifi, vpn, tailnetIp)
 }
+
+private fun homeSnapshot(
+    state: HomeRuntimeState,
+    running: Boolean,
+    health: Boolean,
+    port: Int?,
+    network: HomeNetworkState,
+    agentReachable: Boolean? = null,
+    lastError: String? = null,
+) = HomeRuntimeSnapshot(
+    state = state,
+    serverRunning = running,
+    // The PC/Agent may report an error while the local home server is still healthy.
+    // Keep these layers separate so a reachable server does not look stopped merely
+    // because the PC is offline or rejected an Agent request.
+    serverState = when {
+        running && health -> com.mggx.pccontrol.next.v2.HomeServerState.READY
+        state == HomeRuntimeState.STARTING -> com.mggx.pccontrol.next.v2.HomeServerState.STARTING
+        state == HomeRuntimeState.ERROR -> com.mggx.pccontrol.next.v2.HomeServerState.ERROR
+        else -> com.mggx.pccontrol.next.v2.HomeServerState.STOPPED
+    },
+    localHealth = health,
+    serverPort = port,
+    tailscaleIp = network.tailscaleIp,
+    wifiAvailable = network.wifiAvailable,
+    vpnActive = network.tailscaleAvailable,
+    agentReachable = agentReachable,
+    lastError = lastError,
+)
 
 private fun Throwable.isFatal(): Boolean = this is VirtualMachineError || this is ThreadDeath
 

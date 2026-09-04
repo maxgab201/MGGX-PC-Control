@@ -24,6 +24,7 @@ import com.mggx.pccontrol.next.pairing.PcPairingResult
 import com.mggx.pccontrol.next.security.CredentialResult
 import com.mggx.pccontrol.next.v2.CheckState
 import com.mggx.pccontrol.next.v2.DeviceRole
+import com.mggx.pccontrol.next.v2.HomeServerState
 import com.mggx.pccontrol.next.v2.OnboardingStep
 import com.mggx.pccontrol.next.v2.VerificationItem
 import kotlinx.coroutines.delay
@@ -33,9 +34,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 sealed interface UiEvent { data object OpenMoonlight : UiEvent; data class Message(val text: String) : UiEvent }
 
@@ -60,12 +63,24 @@ class NextViewModel(application: Application) : AndroidViewModel(application) {
     fun startHome() = viewModelScope.launch {
         val current = store.snapshot()
         store.saveHome(current.home.copy(enabled = true))
-        startHomeServiceOrScheduleRestore()
+        ensureHomeServiceReady()
     }
-    fun restartHome() = HomeDeviceService.restart(getApplication())
+    fun ensureHomeServiceRunning() = viewModelScope.launch { ensureHomeServiceReady() }
+    fun restartHome() = viewModelScope.launch {
+        _message.value = "Reiniciando la conexión…"
+        runCatching { HomeDeviceService.restart(getApplication()) }
+            .onFailure { _message.value = "Android no pudo iniciar la conexión: ${it.javaClass.simpleName}" }
+    }
     fun ensureHomeOffer() = createHomeOffer(force = false)
     fun generateHomeOffer() = createHomeOffer(force = true)
     private fun createHomeOffer(force: Boolean) = viewModelScope.launch {
+        val readiness = ensureHomeServiceReady()
+        if (readiness.isFailure) {
+            val message = readiness.exceptionOrNull()?.message ?: "El servidor local no está listo."
+            HomePairingCoordinator.invalidateForUnavailableServer(message)
+            _message.value = message
+            return@launch
+        }
         val port = store.snapshot().home.port
         val result = withContext(Dispatchers.IO) {
             if (force) HomePairingCoordinator.generate(port) else HomePairingCoordinator.ensure(port)
@@ -73,6 +88,24 @@ class NextViewModel(application: Application) : AndroidViewModel(application) {
         _message.value = result.exceptionOrNull()?.message
     }
     fun markHomeOfferExpired(secret: String) = HomePairingCoordinator.markExpired(secret)
+
+    private suspend fun ensureHomeServiceReady(): Result<Unit> {
+        val current = store.snapshot()
+        if (!current.home.enabled) return Result.failure(IllegalStateException("Primero vinculá la PC para activar la conexión de casa."))
+        val started = runCatching { HomeDeviceService.start(getApplication<Application>()) }
+        if (started.isFailure) {
+            HomeRestoreWorker.enqueue(getApplication())
+            return Result.failure(IllegalStateException("Android no pudo iniciar el servicio de conexión."))
+        }
+        val runtime = withTimeoutOrNull(8_000) {
+            HomeDeviceRuntime.state.first { it.serverState == HomeServerState.READY || it.serverState == HomeServerState.ERROR }
+        }
+        return when {
+            runtime?.serverState == HomeServerState.READY && runtime.localHealth -> Result.success(Unit)
+            runtime?.lastError != null -> Result.failure(IllegalStateException(runtime.lastError))
+            else -> Result.failure(IllegalStateException("El servidor local no respondió. Tocá Reintentar conexión."))
+        }
+    }
 
     fun claimHome(offer: PairingOffer) = viewModelScope.launch {
         if (_busy.value != null) return@launch
@@ -192,13 +225,7 @@ class NextViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun startHomeServiceOrScheduleRestore() {
-        runCatching { HomeDeviceService.start(getApplication<Application>()) }
-            .onFailure {
-                HomeRestoreWorker.enqueue(getApplication())
-                _message.value = "Android pospuso el servicio de conexión. Se reintentará automáticamente."
-            }
-    }
+    private fun startHomeServiceOrScheduleRestore() = viewModelScope.launch { ensureHomeServiceReady() }
 
     companion object {
         fun stepAfterPcPairing(result: PcPairingResult): OnboardingStep =

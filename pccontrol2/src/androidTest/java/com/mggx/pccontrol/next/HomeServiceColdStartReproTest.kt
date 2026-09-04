@@ -9,16 +9,23 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.mggx.pccontrol.next.data.NextSettingsStore
 import com.mggx.pccontrol.next.home.HomeDeviceRuntime
 import com.mggx.pccontrol.next.home.HomeDeviceService
+import com.mggx.pccontrol.next.home.HomePairingClient
+import com.mggx.pccontrol.next.home.HomePairingCoordinator
+import com.mggx.pccontrol.next.home.HomeClaimResult
 import com.mggx.pccontrol.next.v2.DeviceRole
 import com.mggx.pccontrol.next.v2.HomeDeviceConfig
 import com.mggx.pccontrol.next.v2.HomeRuntimeState
+import com.mggx.pccontrol.next.v2.HomeServerState
 import com.mggx.pccontrol.next.v2.OnboardingStep
 import com.mggx.pccontrol.next.v2.WakeOnLanConfig
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.net.ServerSocket
@@ -86,10 +93,52 @@ class HomeServiceColdStartReproTest {
             NextSettingsStore(context).saveHome(HomeDeviceConfig(enabled = true, port = 18767))
             HomeDeviceService.start(context)
             HomeDeviceService.start(context)
-            delay(2_000)
-            HomeDeviceService.restart(context)
-            delay(2_000)
-            assertNotNull(HomeDeviceRuntime.state.value)
+            repeat(10) { HomeDeviceService.restart(context) }
+            val runtime = withTimeoutOrNull(8_000) {
+                HomeDeviceRuntime.state.first { it.serverState == HomeServerState.READY || it.serverState == HomeServerState.ERROR }
+            }
+            assertNotNull(runtime)
+            assertTrue(runtime?.serverState != HomeServerState.ERROR)
+        }
+    }
+
+    @Test
+    fun completedHomeDashboardAutoStartsAndVerifiesLocalHealth() {
+        runBlocking {
+            context.stopService(Intent(context, HomeDeviceService::class.java))
+            delay(500)
+            val store = NextSettingsStore(context)
+            store.selectRole(DeviceRole.HOME_PHONE)
+            seedPairedAgent(store, 18768)
+            store.complete()
+            ActivityScenario.launch(NextMainActivity::class.java).use { scenario ->
+                scenario.onActivity { assertNotNull(it) }
+                val runtime = withTimeoutOrNull(8_000) {
+                    HomeDeviceRuntime.state.first { it.serverState == HomeServerState.READY || it.serverState == HomeServerState.ERROR }
+                }
+                assertNotNull(runtime)
+                assertEquals(HomeServerState.READY, runtime?.serverState)
+                assertTrue(runtime?.localHealth == true)
+                assertEquals(18768, runtime?.serverPort)
+            }
+        }
+    }
+
+    @Test
+    fun readyHomeServerClaimsControllerOfferAndAnswersStatus() {
+        runBlocking {
+            context.stopService(Intent(context, HomeDeviceService::class.java))
+            delay(500)
+            val store = NextSettingsStore(context)
+            store.saveHome(HomeDeviceConfig(enabled = true, port = 18769))
+            HomeDeviceService.start(context)
+            val runtime = withTimeoutOrNull(8_000) {
+                HomeDeviceRuntime.state.first { it.serverState == HomeServerState.READY || it.serverState == HomeServerState.ERROR }
+            }
+            assertEquals(HomeServerState.READY, runtime?.serverState)
+            val offer = HomePairingCoordinator.generate(18769) { "127.0.0.1" }.getOrThrow()
+            val claimed = HomePairingClient(store).claim(offer)
+            assertTrue(claimed is HomeClaimResult.Success)
         }
     }
 

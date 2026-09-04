@@ -52,4 +52,11 @@ class HomePairingCoordinatorTest {
         assertEquals(HomeOfferPhase.ERROR, HomePairingCoordinator.state.value.phase)
         assertTrue(HomePairingCoordinator.state.value.message.orEmpty().contains("Tailscale"))
     }
+    @Test fun unavailableServerInvalidatesExistingOffer() {
+        val offer = HomePairingCoordinator.generate(8765, 1_000) { "100.64.1.2" }.getOrThrow()
+        HomePairingCoordinator.invalidateForUnavailableServer("El servidor local no responde")
+        assertEquals(HomeOfferPhase.ERROR, HomePairingCoordinator.state.value.phase)
+        assertTrue(HomePairingCoordinator.state.value.message.orEmpty().contains("servidor"))
+        assertFalse(HomePairingCoordinator.sessions.consume(offer.secret, 1_001))
+    }
 }

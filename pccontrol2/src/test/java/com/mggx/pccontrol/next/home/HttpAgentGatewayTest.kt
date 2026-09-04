@@ -5,8 +5,12 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 
 class HttpAgentGatewayTest {
     private lateinit var server: MockWebServer
@@ -21,5 +25,10 @@ class HttpAgentGatewayTest {
         assertEquals("POST", request.method)
         assertEquals("Bearer AGENT_TEST_TOKEN", request.getHeader("Authorization"))
         assertEquals("/api/v1/power/lock", request.path)
+    }
+    @Test fun homeClaimErrorsIdentifyTheFailedNetworkLayer() {
+        assertTrue(homeClaimNetworkMessage(SocketTimeoutException(), "100.64.1.2", 8765).contains("tiempo"))
+        assertTrue(homeClaimNetworkMessage(UnknownHostException(), "home.ts.net", 8765).contains("resolver"))
+        assertTrue(homeClaimNetworkMessage(ConnectException("Connection refused"), "100.64.1.2", 8765).contains("servicio"))
     }
 }

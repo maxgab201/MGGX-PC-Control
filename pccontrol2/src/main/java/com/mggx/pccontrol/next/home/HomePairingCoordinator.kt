@@ -71,15 +71,23 @@ object HomePairingCoordinator {
         }
     }
 
+    /** A QR must never outlive the listener that can redeem it. */
+    fun invalidateForUnavailableServer(message: String) = synchronized(lock) {
+        sessions.clear()
+        _state.value = HomeOfferState(HomeOfferPhase.ERROR, message = message)
+    }
+
     internal fun resetForTest() = synchronized(lock) { _state.value = HomeOfferState() }
 }
 
 object TailscaleAddressProvider {
-    fun address(): String? = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
-        .flatMap { it.inetAddresses.toList() }
-        .filterIsInstance<Inet4Address>()
-        .map { it.hostAddress.orEmpty() }
-        .firstOrNull(::isTailnetIpv4)
+    fun address(): String? = runCatching {
+        NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+            .flatMap { it.inetAddresses.toList() }
+            .filterIsInstance<Inet4Address>()
+            .map { it.hostAddress.orEmpty() }
+            .firstOrNull(::isTailnetIpv4)
+    }.getOrNull()
 
     fun isTailnetIpv4(value: String): Boolean {
         val parts = value.split('.').mapNotNull(String::toIntOrNull)
