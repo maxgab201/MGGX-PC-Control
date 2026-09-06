@@ -5,6 +5,8 @@ import com.mggx.pccontrol.next.pairing.PairingOffer
 import com.mggx.pccontrol.next.pairing.PairingProtocol
 import com.mggx.pccontrol.next.security.CredentialResult
 import com.mggx.pccontrol.next.v2.HomeDeviceConfig
+import com.mggx.pccontrol.next.v2.HomePortStrategy
+import com.mggx.pccontrol.next.v2.HomeServerFailure
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
@@ -33,6 +35,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ConnectException
+import java.net.BindException
 import java.net.NoRouteToHostException
 import java.net.ServerSocket
 import java.net.SocketTimeoutException
@@ -162,6 +165,13 @@ class HomePairingSessions {
     fun clear() = synchronized(lock) { active = null }
 }
 
+/** A recoverable listener-start failure with a layer-specific diagnostic code. */
+class HomeServerStartException(
+    val failure: HomeServerFailure,
+    message: String,
+    cause: Throwable? = null,
+) : IllegalStateException(message, cause)
+
 /**
  * Private HTTP server exposed through Tailscale. Health is unauthenticated; every control route
  * requires the controller credential and redirects are irrelevant because this is a server.
@@ -172,23 +182,66 @@ class HomeDeviceServer(
 ) {
     private val lifecycle = Mutex()
     private var engine: EmbeddedServer<*, *>? = null
+    @Volatile private var boundPort: Int? = null
     @Volatile private var ready = false
     @Volatile private var lastStartError: String? = null
+    @Volatile private var lastFailure: HomeServerFailure? = null
+    @Volatile private var releasePending = false
     val isRunning get() = ready
     val error get() = lastStartError
+    val failure get() = lastFailure
+    val port get() = boundPort
 
-    suspend fun start(config: HomeDeviceConfig) {
-        lifecycle.withLock {
-            if (ready && localHealth(config.port)) return
+    /**
+     * Starts the real Ktor listener on a dedicated port. A preliminary socket probe is useful
+     * only for diagnosis; READY is granted exclusively after Ktor responds to local /health.
+     */
+    suspend fun start(config: HomeDeviceConfig): Int {
+        return lifecycle.withLock {
+            val currentPort = boundPort
+            if (ready && currentPort != null && localHealth(currentPort)) return@withLock currentPort
             stopLocked()
-            require(config.port in 1..65_535)
-            ready = false
-            lastStartError = null
-            // CIO binds its socket asynchronously after start(wait = false) returns. Without this
-            // synchronous probe, an occupied port escapes the caller's try/catch as an uncaught
-            // DefaultDispatcher exception and kills the whole application process.
-            ensurePortAvailable(config.port)
-            engine = embeddedServer(CIO, host = "0.0.0.0", port = config.port) {
+            var last: HomeServerStartException? = null
+            for (candidate in HomePortStrategy.candidates(config.port)) {
+                try {
+                    startOnPort(config.copy(port = candidate), candidate)
+                    return@withLock candidate
+                } catch (error: HomeServerStartException) {
+                    last = error
+                    lastFailure = error.failure
+                    lastStartError = "${error.failure.name}: ${error.message}"
+                    // Every candidate is disposable; a conflict must never make 8765 or a
+                    // recently released self-port a single point of failure.
+                    stopLocked()
+                }
+            }
+            throw last ?: HomeServerStartException(
+                HomeServerFailure.KTOR_BIND_FAILED,
+                "No se pudo iniciar el servidor de conexión.",
+            )
+        }
+    }
+
+    private suspend fun startOnPort(config: HomeDeviceConfig, port: Int) {
+        ready = false
+        boundPort = null
+        lastStartError = null
+        lastFailure = null
+        try {
+            // This is diagnostic only. The Ktor bind and local health check below are the
+            // authoritative readiness checks, which avoids treating this as a TOCTOU guarantee.
+            ensurePortAvailable(port)
+        } catch (error: BindException) {
+            val code = if (releasePending) HomeServerFailure.SELF_RESTART_BIND_CONFLICT else HomeServerFailure.PORT_OCCUPIED_BEFORE_START
+            throw HomeServerStartException(code, "El puerto $port ya está en uso antes de iniciar.", error)
+        } catch (error: Throwable) {
+            throw HomeServerStartException(HomeServerFailure.PORT_OCCUPIED_BEFORE_START, "No se pudo comprobar el puerto $port.", error)
+        }
+        try {
+            // Remember the attempted port before CIO starts, so a failed asynchronous bind is
+            // still followed by a real release wait during fallback/restart cleanup.
+            boundPort = port
+            engine = embeddedServer(CIO, host = "0.0.0.0", port = port) {
             routing {
                 get("/health") { call.respondText("""{"ok":true,"service":"mggx-home-device","version":1}""", ContentType.Application.Json) }
                 get("/api/v1/status") { call.authenticated({ token -> controllerAuthorized(token) }) { config -> forwardStatus(config) } }
@@ -211,14 +264,19 @@ class HomeDeviceServer(
                 }
             }
             }.start(wait = false)
-            if (!awaitLocalHealth(config.port)) {
-                val message = "El servidor local no respondió en el puerto ${config.port}."
-                stopLocked()
-                lastStartError = message
-                throw IllegalStateException(message)
-            }
-            ready = true
+        } catch (error: BindException) {
+            throw HomeServerStartException(HomeServerFailure.KTOR_BIND_FAILED, "Ktor no pudo enlazar el puerto $port.", error)
+        } catch (error: Throwable) {
+            throw HomeServerStartException(HomeServerFailure.KTOR_BIND_FAILED, "Ktor no pudo iniciar el servidor en $port.", error)
         }
+        if (!awaitLocalHealth(port)) {
+            throw HomeServerStartException(
+                HomeServerFailure.LOCAL_HEALTH_FAILED,
+                "Ktor inició, pero /health no respondió en el puerto $port.",
+            )
+        }
+        ready = true
+        releasePending = false
     }
 
     private fun ensurePortAvailable(port: Int) {
@@ -229,10 +287,21 @@ class HomeDeviceServer(
     }
 
     suspend fun stop() = lifecycle.withLock { stopLocked() }
-    private fun stopLocked() {
+    private suspend fun stopLocked() {
         ready = false
+        val priorPort = boundPort
         runCatching { engine?.stop(500, 2_000) }
         engine = null
+        boundPort = null
+        if (priorPort != null) releasePending = !awaitPortReleased(priorPort)
+    }
+
+    private suspend fun awaitPortReleased(port: Int): Boolean {
+        repeat(20) {
+            if (runCatching { ensurePortAvailable(port) }.isSuccess) return true
+            delay(100)
+        }
+        return false
     }
     suspend fun localHealth(port: Int): Boolean = withContext(Dispatchers.IO) {
         runCatching {

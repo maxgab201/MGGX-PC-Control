@@ -27,6 +27,7 @@ import com.mggx.pccontrol.next.data.NextSettingsStore
 import com.mggx.pccontrol.next.security.CredentialResult
 import com.mggx.pccontrol.next.v2.HomeRuntimeSnapshot
 import com.mggx.pccontrol.next.v2.HomeRuntimeState
+import com.mggx.pccontrol.next.v2.HomeServerFailure
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Dispatchers
@@ -111,11 +112,12 @@ class HomeDeviceService : Service() {
 
     /** The only lifecycle entry points. Start/stop/restart cannot overlap. */
     private suspend fun ensureServerRunningLocked() {
+        store?.migrateLegacyHomePort()
         val knownPort = store?.snapshot()?.home?.port
         publishServer(HomeRuntimeState.STARTING, false, false, knownPort)
         val currentStore = store ?: return fail("settings_store", IllegalStateException("Store unavailable"))
         val currentServer = server ?: return fail("server_create", IllegalStateException("Server unavailable"))
-        val config = try {
+        var config = try {
             currentStore.snapshot().home
         } catch (error: Throwable) {
             if (error.isFatal()) throw error
@@ -123,15 +125,26 @@ class HomeDeviceService : Service() {
             return
         }
         if (!config.enabled) { currentServer.stop(); publishServer(HomeRuntimeState.STOPPED, false, false, config.port); stopSelf(); return }
-        try {
+        val selectedPort = try {
             currentServer.start(config)
         } catch (error: Throwable) {
             if (error.isFatal()) throw error
-            fail("server_start", error, "No se pudo iniciar la conexión. El puerto puede estar ocupado.")
+            fail("server_start", error, homeServerStartMessage(error))
+            return
+        }
+        try {
+            if (config.port != selectedPort) {
+                config = config.copy(port = selectedPort)
+                currentStore.saveHome(config)
+            }
+        } catch (error: Throwable) {
+            if (error.isFatal()) throw error
+            currentServer.stop()
+            fail("port_persist", error, "El servidor inició, pero no se pudo guardar su puerto.")
             return
         }
         val network = networkState(this)
-        publishServer(HomeRuntimeState.READY, true, true, config.port, network)
+        publishServer(HomeRuntimeState.READY, true, true, selectedPort, network)
         watchdog?.cancel()
         watchdog = scope.launch { monitor() }
     }
@@ -154,13 +167,14 @@ class HomeDeviceService : Service() {
             val network = networkState(this)
             val config = store?.snapshot()?.home ?: return
             val currentServer = server
+            val activePort = currentServer?.port ?: config.port
             val base = when {
-                currentServer?.isRunning != true || !currentServer.localHealth(config.port) -> {
+                currentServer?.isRunning != true || !currentServer.localHealth(activePort) -> {
                     HomePairingCoordinator.invalidateForUnavailableServer("El servidor local se detuvo. Tocá Reintentar conexión.")
-                    homeSnapshot(HomeRuntimeState.ERROR, false, false, config.port, network, lastError = currentServer?.error ?: "El servidor local no responde")
+                    homeSnapshot(HomeRuntimeState.ERROR, false, false, activePort, network, lastError = currentServer?.error ?: "El servidor local no responde", serverFailure = currentServer?.failure)
                 }
-                !network.wifiAvailable -> homeSnapshot(HomeRuntimeState.NETWORK_UNAVAILABLE, true, true, config.port, network)
-                !network.tailscaleAvailable -> homeSnapshot(HomeRuntimeState.TAILSCALE_UNAVAILABLE, true, true, config.port, network)
+                !network.wifiAvailable -> homeSnapshot(HomeRuntimeState.NETWORK_UNAVAILABLE, true, true, activePort, network)
+                !network.tailscaleAvailable -> homeSnapshot(HomeRuntimeState.TAILSCALE_UNAVAILABLE, true, true, activePort, network)
                 else -> checkAgent(config, network)
             }
             HomeDeviceRuntime.publish(base)
@@ -216,11 +230,13 @@ class HomeDeviceService : Service() {
 
     private fun fail(stage: String, error: Throwable, userMessage: String = "La conexión de casa no pudo iniciarse. Abrí la app para reintentar.") {
         val failure = HomeServiceFailureLog.record(applicationContext, stage, error)
+        val serverFailure = (error as? HomeServerStartException)?.failure
         HomeDeviceRuntime.publish(
             HomeRuntimeSnapshot(
                 state = HomeRuntimeState.ERROR,
                 serverRunning = false,
                 serverState = com.mggx.pccontrol.next.v2.HomeServerState.ERROR,
+                serverFailure = serverFailure,
                 lastError = "$userMessage (${failure.exceptionType.substringAfterLast('.')})",
             ),
         )
@@ -292,6 +308,7 @@ private fun homeSnapshot(
     network: HomeNetworkState,
     agentReachable: Boolean? = null,
     lastError: String? = null,
+    serverFailure: HomeServerFailure? = null,
 ) = HomeRuntimeSnapshot(
     state = state,
     serverRunning = running,
@@ -306,12 +323,21 @@ private fun homeSnapshot(
     },
     localHealth = health,
     serverPort = port,
+    serverFailure = serverFailure,
     tailscaleIp = network.tailscaleIp,
     wifiAvailable = network.wifiAvailable,
     vpnActive = network.tailscaleAvailable,
     agentReachable = agentReachable,
     lastError = lastError,
 )
+
+private fun homeServerStartMessage(error: Throwable): String = when ((error as? HomeServerStartException)?.failure) {
+    HomeServerFailure.PORT_OCCUPIED_BEFORE_START -> "Los puertos de conexión disponibles están ocupados antes de iniciar."
+    HomeServerFailure.SELF_RESTART_BIND_CONFLICT -> "El servidor anterior todavía está liberando su puerto. Reintentá en unos segundos."
+    HomeServerFailure.KTOR_BIND_FAILED -> "El servidor de conexión no pudo enlazar un puerto disponible."
+    HomeServerFailure.LOCAL_HEALTH_FAILED -> "El servidor inició, pero su comprobación local no respondió."
+    null -> "No se pudo iniciar la conexión de casa."
+}
 
 private fun Throwable.isFatal(): Boolean = this is VirtualMachineError || this is ThreadDeath
 

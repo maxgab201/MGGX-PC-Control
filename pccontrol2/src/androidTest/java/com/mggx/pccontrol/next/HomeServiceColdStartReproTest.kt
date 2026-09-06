@@ -16,6 +16,7 @@ import com.mggx.pccontrol.next.v2.DeviceRole
 import com.mggx.pccontrol.next.v2.HomeDeviceConfig
 import com.mggx.pccontrol.next.v2.HomeRuntimeState
 import com.mggx.pccontrol.next.v2.HomeServerState
+import com.mggx.pccontrol.next.v2.HomePortStrategy
 import com.mggx.pccontrol.next.v2.OnboardingStep
 import com.mggx.pccontrol.next.v2.WakeOnLanConfig
 import kotlinx.coroutines.delay
@@ -68,7 +69,7 @@ class HomeServiceColdStartReproTest {
     }
 
     @Test
-    fun occupiedPortBecomesVisibleErrorWithoutKillingActivity() {
+    fun occupiedPreferredPortFallsBackWithoutKillingActivity() {
         runBlocking {
             context.stopService(Intent(context, HomeDeviceService::class.java))
             delay(500)
@@ -77,7 +78,12 @@ class HomeServiceColdStartReproTest {
                 store.saveHome(HomeDeviceConfig(enabled = true, port = 18766))
                 ContextCompat.startForegroundService(context, Intent(context, HomeDeviceService::class.java))
                 delay(3_000)
-                assertEquals(HomeRuntimeState.ERROR, HomeDeviceRuntime.state.value.state)
+                val runtime = withTimeoutOrNull(8_000) {
+                    HomeDeviceRuntime.state.first { it.serverState == HomeServerState.READY || it.serverState == HomeServerState.ERROR }
+                }
+                assertEquals(HomeServerState.READY, runtime?.serverState)
+                assertTrue(runtime?.serverPort != 18766)
+                assertTrue(runtime?.localHealth == true)
                 ActivityScenario.launch(NextMainActivity::class.java).use { scenario ->
                     scenario.onActivity { assertNotNull(it) }
                 }
@@ -93,7 +99,7 @@ class HomeServiceColdStartReproTest {
             NextSettingsStore(context).saveHome(HomeDeviceConfig(enabled = true, port = 18767))
             HomeDeviceService.start(context)
             HomeDeviceService.start(context)
-            repeat(10) { HomeDeviceService.restart(context) }
+            repeat(20) { HomeDeviceService.restart(context) }
             val runtime = withTimeoutOrNull(8_000) {
                 HomeDeviceRuntime.state.first { it.serverState == HomeServerState.READY || it.serverState == HomeServerState.ERROR }
             }
@@ -139,6 +145,59 @@ class HomeServiceColdStartReproTest {
             val offer = HomePairingCoordinator.generate(18769) { "127.0.0.1" }.getOrThrow()
             val claimed = HomePairingClient(store).claim(offer)
             assertTrue(claimed is HomeClaimResult.Success)
+        }
+    }
+
+    @Test
+    fun legacy8765IsMigratedThenReadyAndClaimWorksWhile8765IsOccupied() {
+        runBlocking {
+            context.stopService(Intent(context, HomeDeviceService::class.java))
+            delay(700)
+            ServerSocket(HomePortStrategy.LEGACY_RELAY_PORT).use {
+                val store = NextSettingsStore(context)
+                store.saveHome(HomeDeviceConfig(enabled = true, port = HomePortStrategy.LEGACY_RELAY_PORT))
+                HomeDeviceService.start(context)
+                val runtime = withTimeoutOrNull(10_000) {
+                    HomeDeviceRuntime.state.first {
+                        (it.serverState == HomeServerState.READY || it.serverState == HomeServerState.ERROR) &&
+                            it.serverPort == HomePortStrategy.DEFAULT_PORT
+                    }
+                }
+                assertEquals(HomeServerState.READY, runtime?.serverState)
+                assertEquals(HomePortStrategy.DEFAULT_PORT, runtime?.serverPort)
+                assertTrue(runtime?.localHealth == true)
+                assertEquals(HomePortStrategy.DEFAULT_PORT, store.snapshot().home.port)
+                val selectedPort = requireNotNull(runtime?.serverPort)
+                val offer = HomePairingCoordinator.generate(selectedPort) { "127.0.0.1" }.getOrThrow()
+                assertEquals(HomePortStrategy.DEFAULT_PORT, offer.port)
+                assertTrue(HomePairingClient(store).claim(offer) is HomeClaimResult.Success)
+            }
+        }
+    }
+
+    @Test
+    fun occupiedDedicatedPortFallsBackAndPublishesQrPort() {
+        runBlocking {
+            context.stopService(Intent(context, HomeDeviceService::class.java))
+            delay(700)
+            ServerSocket(HomePortStrategy.DEFAULT_PORT).use {
+                val store = NextSettingsStore(context)
+                store.saveHome(HomeDeviceConfig(enabled = true, port = HomePortStrategy.DEFAULT_PORT))
+                HomeDeviceService.start(context)
+                val runtime = withTimeoutOrNull(10_000) {
+                    HomeDeviceRuntime.state.first {
+                        (it.serverState == HomeServerState.READY || it.serverState == HomeServerState.ERROR) &&
+                            it.serverPort == HomePortStrategy.DEFAULT_PORT + 1
+                    }
+                }
+                assertEquals(HomeServerState.READY, runtime?.serverState)
+                assertEquals(HomePortStrategy.DEFAULT_PORT + 1, runtime?.serverPort)
+                assertTrue(runtime?.localHealth == true)
+                val selectedPort = requireNotNull(runtime?.serverPort)
+                val offer = HomePairingCoordinator.generate(selectedPort) { "127.0.0.1" }.getOrThrow()
+                assertEquals(HomePortStrategy.DEFAULT_PORT + 1, offer.port)
+                assertTrue(HomePairingClient(store).claim(offer) is HomeClaimResult.Success)
+            }
         }
     }
 

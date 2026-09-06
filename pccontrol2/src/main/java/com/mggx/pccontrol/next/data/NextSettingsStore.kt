@@ -10,6 +10,7 @@ import com.mggx.pccontrol.next.security.CredentialResult
 import com.mggx.pccontrol.next.security.NextSecureCredentialStore
 import com.mggx.pccontrol.next.v2.DeviceRole
 import com.mggx.pccontrol.next.v2.HomeDeviceConfig
+import com.mggx.pccontrol.next.v2.HomePortStrategy
 import com.mggx.pccontrol.next.v2.OnboardingStep
 import com.mggx.pccontrol.next.v2.WakeOnLanConfig
 import kotlinx.coroutines.flow.Flow
@@ -24,7 +25,7 @@ data class NextSettings(
     val setupComplete: Boolean = false,
     val home: HomeDeviceConfig = HomeDeviceConfig(),
     val pairedHomeHost: String = "",
-    val pairedHomePort: Int = 8765,
+    val pairedHomePort: Int = HomePortStrategy.DEFAULT_PORT,
     val pairedPcName: String = "MGGX PC",
     val legacyUrl: String = "",
     val legacyPcId: String = "main",
@@ -47,13 +48,13 @@ class NextSettingsStore(private val context: Context) {
         NextSettings(
             role, step, p[Key.complete] ?: false,
             HomeDeviceConfig(
-                enabled = p[Key.homeEnabled] ?: false, port = p[Key.homePort] ?: 8765,
+                enabled = p[Key.homeEnabled] ?: false, port = p[Key.homePort] ?: HomePortStrategy.DEFAULT_PORT,
                 pcId = p[Key.pcId] ?: "main", agentUrl = p[Key.agentUrl] ?: "",
                 agentName = p[Key.pcName] ?: "MGGX PC", lanIp = p[Key.lanIp] ?: "",
                 tailscaleIp = p[Key.tailscaleIp] ?: "", agentVersion = p[Key.agentVersion] ?: "",
                 wakeOnLan = WakeOnLanConfig(p[Key.wolMac] ?: "", p[Key.wolBroadcast] ?: "", p[Key.wolPort] ?: 9),
             ),
-            p[Key.pairedHost] ?: "", p[Key.pairedPort] ?: 8765, p[Key.pairedName] ?: "MGGX PC", p[Key.legacyUrl] ?: "", p[Key.legacyPcId] ?: "main"
+            p[Key.pairedHost] ?: "", p[Key.pairedPort] ?: HomePortStrategy.DEFAULT_PORT, p[Key.pairedName] ?: "MGGX PC", p[Key.legacyUrl] ?: "", p[Key.legacyPcId] ?: "main"
         )
     }
 
@@ -67,6 +68,17 @@ class NextSettingsStore(private val context: Context) {
         p[Key.homeEnabled] = config.enabled; p[Key.homePort] = config.port; p[Key.pcId] = config.pcId; p[Key.agentUrl] = config.agentUrl; p[Key.pcName] = config.agentName
         p[Key.lanIp] = config.lanIp; p[Key.tailscaleIp] = config.tailscaleIp; p[Key.agentVersion] = config.agentVersion
         p[Key.wolMac] = config.wakeOnLan.macAddress; p[Key.wolBroadcast] = config.wakeOnLan.broadcastAddress; p[Key.wolPort] = config.wakeOnLan.udpPort
+    }
+    /** Alpha 1–5 stored the old Termux relay port. Move it before the home service starts. */
+    suspend fun migrateLegacyHomePort(): Boolean {
+        var migrated = false
+        context.nextDataStore.edit { p ->
+            if (p[Key.homePort] == HomePortStrategy.LEGACY_RELAY_PORT) {
+                p[Key.homePort] = HomePortStrategy.DEFAULT_PORT
+                migrated = true
+            }
+        }
+        return migrated
     }
     suspend fun savePairedHome(host: String, port: Int, pcName: String, controllerToken: String, lanIp: String = "", tailscaleIp: String = ""): Boolean {
         if (!credentials.write("home_control", controllerToken)) return false

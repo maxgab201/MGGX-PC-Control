@@ -38,6 +38,29 @@ enum class HomeRuntimeState {
 /** State of the HTTP listener itself. A non-null Ktor engine is not enough evidence. */
 enum class HomeServerState { STOPPED, STARTING, READY, ERROR }
 
+/** Why the embedded home listener could not become READY. Kept separate from PC/Agent errors. */
+enum class HomeServerFailure {
+    PORT_OCCUPIED_BEFORE_START,
+    SELF_RESTART_BIND_CONFLICT,
+    KTOR_BIND_FAILED,
+    LOCAL_HEALTH_FAILED,
+}
+
+/** Dedicated port policy for Control 2. Never reuse the legacy Termux relay default (8765). */
+object HomePortStrategy {
+    const val LEGACY_RELAY_PORT = 8765
+    const val DEFAULT_PORT = 18765
+    const val LAST_PORT = 18785
+
+    fun candidates(preferred: Int): List<Int> {
+        val first = preferred.takeIf { it in DEFAULT_PORT..LAST_PORT } ?: DEFAULT_PORT
+        return buildList {
+            add(first)
+            for (port in DEFAULT_PORT..LAST_PORT) if (port != first) add(port)
+        }
+    }
+}
+
 data class WakeOnLanConfig(
     val macAddress: String = "",
     val broadcastAddress: String = "",
@@ -46,7 +69,7 @@ data class WakeOnLanConfig(
 
 data class HomeDeviceConfig(
     val enabled: Boolean = false,
-    val port: Int = 8765,
+    val port: Int = HomePortStrategy.DEFAULT_PORT,
     val pcId: String = "main",
     val agentUrl: String = "",
     val agentName: String = "MGGX PC",
@@ -77,6 +100,7 @@ data class HomeRuntimeSnapshot(
     val serverState: HomeServerState = HomeServerState.STOPPED,
     val localHealth: Boolean = false,
     val serverPort: Int? = null,
+    val serverFailure: HomeServerFailure? = null,
     val tailscaleIp: String? = null,
     val wifiAvailable: Boolean = false,
     val vpnActive: Boolean = false,

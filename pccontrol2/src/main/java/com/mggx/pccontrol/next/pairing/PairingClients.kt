@@ -4,6 +4,7 @@ import com.mggx.pccontrol.next.data.NextSettingsStore
 import com.mggx.pccontrol.next.home.AgentReply
 import com.mggx.pccontrol.next.home.HttpAgentGateway
 import com.mggx.pccontrol.next.v2.HomeDeviceConfig
+import com.mggx.pccontrol.next.v2.HomePortStrategy
 import com.mggx.pccontrol.next.v2.PcPairingData
 import com.mggx.pccontrol.next.v2.WakeOnLanConfig
 import kotlinx.coroutines.Dispatchers
@@ -53,7 +54,7 @@ class PcAgentPairingClient(private val store: NextSettingsStore) {
                 if (health.code !in 200..299) return@use PcPairingResult.Failure("Encontramos la PC, pero su servicio no respondió correctamente.")
                 if (status.code == 401 || status.code == 403) return@use PcPairingResult.Failure("La PC no aceptó la credencial recién creada.")
                 if (status.code !in 200..299) return@use PcPairingResult.Failure("No pudimos comprobar el estado de la PC.")
-                val config = HomeDeviceConfig(true, 8765, data.pcId, data.agentUrl, data.name, data.lanIp, data.tailscaleIp, data.agentVersion, WakeOnLanConfig(data.macAddress, data.broadcastAddress, 9))
+                val config = HomeDeviceConfig(true, HomePortStrategy.DEFAULT_PORT, data.pcId, data.agentUrl, data.name, data.lanIp, data.tailscaleIp, data.agentVersion, WakeOnLanConfig(data.macAddress, data.broadcastAddress, 9))
                 if (!store.savePairedAgent(config, data.agentToken)) PcPairingResult.Failure("No se pudo guardar la vinculación de forma segura.") else PcPairingResult.Success(data)
             }
         }.getOrElse { PcPairingResult.Failure("No encontramos MGGX PC Agent en la red de tu casa.") }
@@ -71,9 +72,8 @@ class PcAgentPairingClient(private val store: NextSettingsStore) {
             val json = JSONObject(status.body)
             val pc = json.optJSONObject("pc")
             val data = PcPairingData(agentUrl.trim().removeSuffix("/"), cleanToken, json.optString("pcId", "main"), pc?.optString("machineName")?.ifBlank { "MGGX PC" } ?: "MGGX PC", json.optString("lanIp"), json.optJSONObject("tailscale")?.optString("ip").orEmpty(), json.optString("agentVersion"), mac.trim(), broadcast.trim())
-            val config = HomeDeviceConfig(true, 8765, data.pcId, data.agentUrl, data.name, data.lanIp, data.tailscaleIp, data.agentVersion, WakeOnLanConfig(data.macAddress, data.broadcastAddress, 9))
+            val config = HomeDeviceConfig(true, HomePortStrategy.DEFAULT_PORT, data.pcId, data.agentUrl, data.name, data.lanIp, data.tailscaleIp, data.agentVersion, WakeOnLanConfig(data.macAddress, data.broadcastAddress, 9))
             if (!store.savePairedAgent(config, cleanToken)) PcPairingResult.Failure("No se pudo guardar la credencial.") else PcPairingResult.Success(data)
         }.getOrElse { PcPairingResult.Failure("No pudimos comprobar MGGX PC Agent. Revisá la dirección y la credencial.") }
     }
 }
-

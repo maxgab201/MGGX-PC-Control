@@ -49,8 +49,8 @@ jobs:
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print -quit)
           test -x "$APKSIGNER"
           cp "$APK" MGGX-PC-Control-universal-debug-v1.0.2.apk
-          cp "$NEXT_APK" MGGX-PC-Control-2-alpha5-universal-debug.apk
-          sha256sum MGGX-PC-Control-universal-debug-v1.0.2.apk MGGX-PC-Control-2-alpha5-universal-debug.apk > SHA256SUMS.txt
+          cp "$NEXT_APK" MGGX-PC-Control-2-alpha6-universal-debug.apk
+          sha256sum MGGX-PC-Control-universal-debug-v1.0.2.apk MGGX-PC-Control-2-alpha6-universal-debug.apk > SHA256SUMS.txt
           "$APKSIGNER" verify --verbose --print-certs "$APK"
           "$APKSIGNER" verify --verbose --print-certs "$NEXT_APK"
           CERT_SHA256=$("$APKSIGNER" verify --print-certs "$NEXT_APK" | awk -F': ' '/certificate SHA-256 digest/{print $2; exit}')
@@ -61,31 +61,30 @@ jobs:
             echo "signing_persistence=$SIGNING_PERSISTENCE"
             echo "two_build_signature_test=not_run_in_this_workflow"
           } > SIGNING_STATUS.txt
-      - name: Publish MGGX PC Control 2 Alpha 5 release
+      - name: Publish MGGX PC Control 2 Alpha 6 release
         if: github.ref == 'refs/heads/pc-control-2-alpha'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           NOTES=$(cat <<'EOF'
-          - El dashboard inicia y verifica el servicio del celular de casa de forma automática.
-          - El QR sólo se genera después de comprobar /health local.
-          - Lifecycle del servidor serializado: start/restart no pueden competir.
-          - Detección coherente de Wi‑Fi y Tailscale con VPN activa.
-          - Errores de vinculación por capa de red más específicos.
+          - El servidor usa un puerto propio, con fallback automático de 18765 a 18785.
+          - Instalaciones Alpha previas migran automáticamente desde el puerto legado 8765.
+          - READY sólo se informa después del bind real de Ktor y /health local.
+          - El QR incluye el puerto verificado y los diagnósticos distinguen fallos de bind.
           EOF
           )
-          if gh release view v2.0.0-alpha5 >/dev/null 2>&1; then
-            gh release edit v2.0.0-alpha5 --title "MGGX PC Control 2 — Alpha 5" --notes "$NOTES"
+          if gh release view v2.0.0-alpha6 >/dev/null 2>&1; then
+            gh release edit v2.0.0-alpha6 --title "MGGX PC Control 2 — Alpha 6" --notes "$NOTES"
           else
-            gh release create v2.0.0-alpha5 --target "$GITHUB_SHA" --title "MGGX PC Control 2 — Alpha 5" --notes "$NOTES" --prerelease
+            gh release create v2.0.0-alpha6 --target "$GITHUB_SHA" --title "MGGX PC Control 2 — Alpha 6" --notes "$NOTES" --prerelease
           fi
-          gh release upload v2.0.0-alpha5 MGGX-PC-Control-2-alpha5-universal-debug.apk SHA256SUMS.txt --clobber
+          gh release upload v2.0.0-alpha6 MGGX-PC-Control-2-alpha6-universal-debug.apk SHA256SUMS.txt --clobber
       - uses: actions/upload-artifact@v4
         with:
-          name: MGGX-PC-Control-2-alpha5-universal-debug
+          name: MGGX-PC-Control-2-alpha6-universal-debug
           path: |
             MGGX-PC-Control-universal-debug-v1.0.2.apk
-            MGGX-PC-Control-2-alpha5-universal-debug.apk
+            MGGX-PC-Control-2-alpha6-universal-debug.apk
             SHA256SUMS.txt
             SIGNING_STATUS.txt
           if-no-files-found: error

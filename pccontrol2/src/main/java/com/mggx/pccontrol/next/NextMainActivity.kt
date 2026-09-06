@@ -184,6 +184,7 @@ class NextMainActivity : ComponentActivity() {
         StatusRow("Tailscale", runtime.tailscaleIp?.let { "Conectado · $it" } ?: "Revisar")
         StatusRow("Servidor", runtime.serverPort?.let { "Puerto $it" } ?: "Sin datos")
         StatusRow("/health local", if (runtime.localHealth) "OK ✓" else "Sin respuesta")
+        runtime.serverFailure?.let { StatusRow("Diagnóstico del servidor", it.name) }
         StatusRow("PC", runtime.state.name.replace('_', ' '))
         StatusRow("MGGX PC Agent", status(runtime.agentReachable))
         runtime.lastError?.let { Text(it, color = MaterialTheme.colorScheme.error) }

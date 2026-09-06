@@ -81,7 +81,13 @@ class NextViewModel(application: Application) : AndroidViewModel(application) {
             _message.value = message
             return@launch
         }
-        val port = store.snapshot().home.port
+        // The selected listener port is persisted, but read the verified runtime value so a
+        // freshly generated QR can never race a DataStore update after port fallback.
+        val port = HomeDeviceRuntime.state.value.serverPort
+        if (port == null) {
+            _message.value = "El servidor local todavía no informó un puerto activo."
+            return@launch
+        }
         val result = withContext(Dispatchers.IO) {
             if (force) HomePairingCoordinator.generate(port) else HomePairingCoordinator.ensure(port)
         }
