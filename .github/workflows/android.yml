@@ -15,6 +15,9 @@ jobs:
           java-version: '17'
           cache: gradle
       - uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '15859902'
+          packages: platform-tools
       - name: Configure stable signing when repository secrets exist
         env:
           MGGX_KEYSTORE_BASE64: ${{ secrets.MGGX_KEYSTORE_BASE64 }}
