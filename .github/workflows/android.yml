@@ -37,6 +37,10 @@ jobs:
           else
             echo "SIGNING_PERSISTENCE=blocked: required GitHub Actions secrets are absent" >> "$GITHUB_ENV"
           fi
+      - name: Require persistent signing
+        run: |
+          test "$SIGNING_PERSISTENCE" = "verified"
+
       - name: Unit tests
         run: |
           ./gradlew clean --stacktrace
